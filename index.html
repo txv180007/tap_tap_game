@@ -148,6 +148,9 @@
   .hud { position: absolute; pointer-events: none; }
   #hudScore { top: 18px; left: 24px; font-size: 30px; font-weight: 800; font-variant-numeric: tabular-nums; text-shadow: 0 0 12px rgba(35,230,255,0.5); }
   #hudAcc { top: 58px; left: 25px; font-size: 15px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  #hudMult { top: 84px; left: 24px; font-size: 27px; font-weight: 900; color: var(--dim); font-variant-numeric: tabular-nums; text-shadow: 0 0 16px rgba(255,176,46,0.35); }
+  #hudMult.pop { animation: multPop .22s ease-out; }
+  @keyframes multPop { 0% { transform: scale(1.7); } 100% { transform: scale(1); } }
   #hudDiff { top: 18px; right: 24px; font-size: 14px; color: var(--dim); text-align: right; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #hudCombo {
     top: 24%; left: 50%; transform: translateX(-50%);
@@ -317,6 +320,7 @@
   <div class="hud" id="hudProgress"></div>
   <div class="hud" id="hudScore">0</div>
   <div class="hud" id="hudAcc">100.0%</div>
+  <div class="hud" id="hudMult">x1</div>
   <div class="hud" id="hudDiff"></div>
   <div class="hud" id="hudCombo"></div>
   <div class="hud" id="hudJudge"></div>
@@ -340,6 +344,8 @@
       <span style="color:var(--lane3)">Good</span><span class="v" id="resGood">0</span>
       <span style="color:var(--lane1)">Miss</span><span class="v" id="resMiss">0</span>
       <span>Max combo</span><span class="v" id="resCombo">0</span>
+      <span>Max multiplier</span><span class="v" id="resMult">x1</span>
+      <span>Holds</span><span class="v" id="resHolds">0/0</span>
       <span>Accuracy</span><span class="v" id="resAcc">0%</span>
       <span>Score</span><span class="v" id="resScore">0</span>
     </div>
@@ -382,11 +388,22 @@ const JUDGE = {
 };
 const MISS_COLOR = "#ff3da0";
 
+// score multiplier ladder: reached by combo streaks, lost on any miss or broken hold
+const MULT_TIERS = [
+  { combo: 100, mult: 20 },
+  { combo: 60,  mult: 10 },
+  { combo: 40,  mult: 5 },
+  { combo: 30,  mult: 4 },
+  { combo: 20,  mult: 3 },
+  { combo: 10,  mult: 2 },
+];
+const HOLD_TICK_SCORE = 40; // awarded (x multiplier) for holding a note to its tail
+
 const DIFFS = {
-  easy:   { name: "EASY",   subPerBeat: 1, minGap: 0.42,  nps: 1.2, doubles: 0 },
-  normal: { name: "NORMAL", subPerBeat: 2, minGap: 0.24,  nps: 2.1, doubles: 0 },
-  hard:   { name: "HARD",   subPerBeat: 4, minGap: 0.135, nps: 3.3, doubles: 0.06 },
-  expert: { name: "EXPERT", subPerBeat: 4, minGap: 0.085, nps: 4.8, doubles: 0.10 },
+  easy:   { name: "EASY",   subPerBeat: 1, minGap: 0.42,  nps: 1.2, doubles: 0,    holdFrac: 0.18 },
+  normal: { name: "NORMAL", subPerBeat: 2, minGap: 0.24,  nps: 2.1, doubles: 0,    holdFrac: 0.15 },
+  hard:   { name: "HARD",   subPerBeat: 4, minGap: 0.135, nps: 3.3, doubles: 0.06, holdFrac: 0.12 },
+  expert: { name: "EXPERT", subPerBeat: 4, minGap: 0.085, nps: 4.8, doubles: 0.10, holdFrac: 0.10 },
 };
 
 /* ---------------------------------------------------------------- state */
@@ -569,95 +586,204 @@ function detectBPM() {
 }
 
 /* =====================================================================
-   NOTE GENERATION
-   Snap candidates to the beat grid, score them by onset energy
-   (weighted toward downbeats), then greedily pick the strongest
-   while enforcing a minimum gap for the chosen difficulty.
+   NOTE GENERATION — bar-based, repetition-aware, with hold notes.
+   1. The song is split into bars from the beat anchor; each bar gets a
+      16th-note onset fingerprint. Bars that sound alike (chorus repeats,
+      loops) are clustered by cosine similarity.
+   2. ONE pattern is generated per unique cluster — strongest onsets win,
+      weighted toward downbeats, spaced by the difficulty's min gap —
+      then stamped into every repeat, so repeating music plays
+      repeating steps.
+   3. Notes whose energy stays sustained (no dips between small slices,
+      so drum tails don't count) become hold notes in their lane.
    ===================================================================== */
+
+// how many grid steps (starting at t0) the mix stays audibly sustained
+function sustainSteps(t0, step, maxSteps, dur) {
+  const e0 = windowEnergy(t0, Math.min(step, 0.10));
+  if (e0 <= 0) return 0;
+  const slice = 0.04;
+  let k = 0;
+  while (k < maxSteps) {
+    const segA = t0 + k * step, segB = t0 + (k + 1) * step;
+    if (segB > dur - 0.05) break;
+    let ok = true;
+    for (let ts = segA; ts < segB; ts += slice) {
+      if (windowEnergy(ts, slice) < e0 * 0.35) { ok = false; break; }
+    }
+    if (!ok) break;
+    k++;
+  }
+  return k;
+}
+
 function generateNotes(diffKey) {
   const D = DIFFS[diffKey];
   const dur = S.buffer.duration;
   const period = 60 / S.bpm;
   const step = period / D.subPerBeat;
+  const subsPerBar = D.subPerBeat * 4;
+  const barLen = period * 4;
   const win = Math.min(step, 0.10);
-
-  // global reference level to skip silence
   const globalE = windowEnergy(0, dur);
 
-  const candidates = [];
-  const first = S.beatOffset - Math.floor(S.beatOffset / step) * step;
-  for (let t = first; t < dur - 0.30; t += step) {
-    if (t < 1.0) continue; // lead-in: no notes in the first second
-    const e = windowEnergy(t, win);
-    if (e < globalE * 0.18) continue; // silence / breakdown
-    const prev = windowEnergy(t - win, win);
-    let strength = e + Math.max(0, e - prev) * 2.5; // energy + onset emphasis
-    const subIdx = Math.round((t - S.beatOffset) / step);
-    const beatPos = subIdx / D.subPerBeat;
-    if (Math.abs(beatPos - Math.round(beatPos)) < 1e-6) {
-      strength *= (Math.round(beatPos) % 4 === 0) ? 1.6 : 1.3; // downbeat / beat
-    } else if (Math.abs(beatPos * 2 - Math.round(beatPos * 2)) < 1e-6) {
-      strength *= 1.1; // half-beat
+  // bars tile the song from the beat anchor (anchor <= 0)
+  const anchor = S.beatOffset - Math.ceil(S.beatOffset / barLen) * barLen;
+  const nBars = Math.max(1, Math.ceil((dur - anchor) / barLen));
+
+  /* ---- 1. fingerprint each bar at 16th-note resolution ---- */
+  const FP = 16;
+  const fpStep = period / 4;
+  const fpWin = Math.min(fpStep, 0.10);
+  const fingerprints = [], barEnergy = [];
+  for (let b = 0; b < nBars; b++) {
+    const bs = anchor + b * barLen;
+    const v = new Float32Array(FP);
+    for (let i = 0; i < FP; i++) {
+      const t = bs + i * fpStep;
+      if (t < 0 || t + fpStep > dur) { v[i] = 0; continue; }
+      const e = windowEnergy(t, fpWin);
+      v[i] = Math.max(0, e - windowEnergy(t - fpWin, fpWin)) + 0.3 * e;
     }
-    candidates.push({ t, strength });
+    let mean = 0;
+    for (let i = 0; i < FP; i++) mean += v[i];
+    mean /= FP;
+    let norm = 0;
+    for (let i = 0; i < FP; i++) { v[i] -= mean; norm += v[i] * v[i]; }
+    norm = Math.sqrt(norm) || 1;
+    for (let i = 0; i < FP; i++) v[i] /= norm;
+    fingerprints.push(v);
+    const cs = Math.max(0, bs), cl = Math.min(barLen, dur - cs);
+    barEnergy.push(cl > 0 ? windowEnergy(cs, cl) : 0);
   }
 
-  const target = Math.min(candidates.length, Math.round(dur * D.nps));
-  candidates.sort((a, b) => b.strength - a.strength);
-
-  // greedy accept with min-gap, using a sorted times array + binary search
-  const accepted = [];
-  const times = [];
-  function insertPos(t) {
-    let lo = 0, hi = times.length;
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (times[mid] < t) lo = mid + 1; else hi = mid; }
-    return lo;
-  }
-  for (const c of candidates) {
-    if (accepted.length >= target) break;
-    const p = insertPos(c.t);
-    if (p > 0 && c.t - times[p - 1] < D.minGap) continue;
-    if (p < times.length && times[p] - c.t < D.minGap) continue;
-    times.splice(p, 0, c.t);
-    accepted.splice(p, 0, c);
+  /* ---- 2. cluster bars against each cluster's first occurrence ---- */
+  const clusterOf = new Array(nBars);
+  const reps = [];
+  for (let b = 0; b < nBars; b++) {
+    let found = -1;
+    for (const r of reps) {
+      let dot = 0;
+      for (let i = 0; i < FP; i++) dot += fingerprints[b][i] * r.fp[i];
+      const eRatio = (barEnergy[b] + 1e-6) / (r.energy + 1e-6);
+      if (dot > 0.80 && eRatio > 0.55 && eRatio < 1.8) { found = r.id; break; }
+    }
+    if (found < 0) {
+      found = reps.length;
+      reps.push({ fp: fingerprints[b], energy: barEnergy[b], id: found, firstBar: b });
+    }
+    clusterOf[b] = found;
   }
 
-  // lane assignment: readable pseudo-random walk
-  let seed = 1234567;
-  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  /* ---- 3. one step pattern per unique cluster ---- */
+  function buildBarPattern(bIdx, clusterId) {
+    const bs = anchor + bIdx * barLen;
+    if (barEnergy[bIdx] < globalE * 0.18) return []; // silent / breakdown bar
+    let seed = 1234567 + clusterId * 999983;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+
+    const cands = [];
+    for (let sIdx = 0; sIdx < subsPerBar; sIdx++) {
+      const t = bs + sIdx * step;
+      if (t < 0 || t > dur - 0.30) continue;
+      const e = windowEnergy(t, win);
+      if (e < globalE * 0.18) continue;
+      const prev = windowEnergy(t - win, win);
+      let strength = e + Math.max(0, e - prev) * 2.5;
+      const beatPos = sIdx / D.subPerBeat;
+      if (Number.isInteger(beatPos)) strength *= beatPos === 0 ? 1.6 : 1.3;
+      else if (Number.isInteger(beatPos * 2)) strength *= 1.1;
+      cands.push({ sIdx, t, strength });
+    }
+    if (!cands.length) return [];
+
+    const energyScale = Math.max(0.35, Math.min(1.3, barEnergy[bIdx] / (globalE || 1)));
+    const budget = Math.max(1, Math.round(D.nps * barLen * energyScale));
+    cands.sort((a, b) => b.strength - a.strength);
+    const minGapSubs = Math.max(1, Math.ceil(D.minGap / step));
+    const chosen = [];
+    for (const c of cands) {
+      if (chosen.length >= budget) break;
+      if (chosen.some(o => Math.abs(o.sIdx - c.sIdx) < minGapSubs)) continue;
+      chosen.push(c);
+    }
+    chosen.sort((a, b) => a.sIdx - b.sIdx);
+
+    // holds where the sound actually sustains, strongest first
+    const minHoldSteps = Math.max(2, Math.round((period * (diffKey === "easy" ? 1.0 : 0.75)) / step));
+    const maxHoldSteps = Math.round((period * 4) / step);
+    let holdBudget = Math.max(1, Math.round(chosen.length * D.holdFrac));
+    const byStrength = [...chosen].sort((a, b) => b.strength - a.strength);
+    for (const c of byStrength) {
+      if (holdBudget <= 0) break;
+      const k = sustainSteps(c.t, step, maxHoldSteps, dur);
+      if (k >= minHoldSteps) { c.holdSteps = k; holdBudget--; }
+    }
+
+    // lane assignment; holds occupy their lane until they end
+    const busyUntilSub = [-99, -99, -99, -99];
+    let prevLane = -1, prevPrev = -2, prevSub = -99;
+    const out = [];
+    const topStrength = byStrength.length ? byStrength[0].strength : 1;
+    for (const c of chosen) {
+      const free = [];
+      for (let l = 0; l < LANES; l++) if (busyUntilSub[l] <= c.sIdx) free.push(l);
+      if (!free.length) continue;
+      let lane = free[Math.floor(rnd() * free.length)];
+      for (let tries = 0; tries < 6; tries++) {
+        const tooFast = (c.sIdx - prevSub) * step < 0.28 && lane === prevLane;
+        const triple = lane === prevLane && lane === prevPrev;
+        if (!tooFast && !triple) break;
+        lane = free[Math.floor(rnd() * free.length)];
+      }
+      const holdSteps = c.holdSteps || 0;
+      if (holdSteps) busyUntilSub[lane] = c.sIdx + holdSteps + 1;
+      out.push({ sub: c.sIdx, lane, holdSteps, strength: c.strength });
+      // two-lane jumps on strong isolated (non-hold) hits
+      if (D.doubles > 0 && !holdSteps && c.strength > topStrength * 0.8 &&
+          (c.sIdx - prevSub) * step >= 0.3 && rnd() < D.doubles * 1.8) {
+        const others = free.filter(l => l !== lane);
+        if (others.length) out.push({ sub: c.sIdx, lane: others[Math.floor(rnd() * others.length)], holdSteps: 0, strength: c.strength });
+      }
+      prevPrev = prevLane; prevLane = lane; prevSub = c.sIdx;
+    }
+    return out;
+  }
+  const patterns = reps.map(r => buildBarPattern(r.firstBar, r.id));
+
+  /* ---- 4. stamp the patterns into every bar ---- */
   const notes = [];
-  let prevLane = -1, prevPrevLane = -2, prevT = -10;
-  for (const c of accepted) {
-    let lane;
-    for (let tries = 0; tries < 8; tries++) {
-      lane = Math.floor(rnd() * LANES);
-      const tooFast = c.t - prevT < 0.28 && lane === prevLane;
-      const triple = lane === prevLane && lane === prevPrevLane;
-      if (!tooFast && !triple) break;
+  const laneBusyUntil = [-99, -99, -99, -99]; // absolute seconds (hold tails)
+  let lastTime = -99;
+  let curT = -1;
+  const usedAtT = []; // lanes already taken at the current timestamp (doubles)
+  for (let b = 0; b < nBars; b++) {
+    const pat = patterns[clusterOf[b]];
+    const bs = anchor + b * barLen;
+    for (const p of pat) {
+      const t = bs + p.sub * step;
+      if (t < 1.0 || t > dur - 0.30) continue; // 1 s lead-in
+      const gap = t - lastTime;
+      if (gap < D.minGap && gap > 1e-9) continue; // equal times = intentional doubles
+      if (t !== curT) { curT = t; usedAtT.length = 0; }
+      const laneFree = l => laneBusyUntil[l] <= t && !usedAtT.includes(l);
+      let lane = p.lane;
+      if (!laneFree(lane)) {
+        const free = [0, 1, 2, 3].filter(laneFree);
+        if (!free.length) continue;
+        lane = free[0];
+      }
+      usedAtT.push(lane);
+      let durSec = p.holdSteps ? p.holdSteps * step : 0;
+      if (durSec && t + durSec > dur - 0.05) {
+        durSec = dur - 0.05 - t;
+        if (durSec < step * 2) durSec = 0; // too short to hold: make it a tap
+      }
+      if (durSec) laneBusyUntil[lane] = t + durSec + 0.15;
+      notes.push({ time: t, lane, strength: p.strength, dur: durSec });
+      if (t > lastTime) lastTime = t;
     }
-    notes.push({ time: c.t, lane, strength: c.strength });
-    prevPrevLane = prevLane; prevLane = lane; prevT = c.t;
   }
-
-  // doubles (two-lane jumps) on the strongest, well-spaced notes
-  if (D.doubles > 0 && notes.length > 8) {
-    const byStrength = [...notes].sort((a, b) => b.strength - a.strength);
-    let quota = Math.floor(notes.length * D.doubles);
-    const extra = [];
-    for (const nMain of byStrength) {
-      if (quota <= 0) break;
-      const i = notes.indexOf(nMain);
-      const gapPrev = i > 0 ? nMain.time - notes[i - 1].time : 99;
-      const gapNext = i < notes.length - 1 ? notes[i + 1].time - nMain.time : 99;
-      if (gapPrev < 0.30 || gapNext < 0.30) continue;
-      let lane2 = Math.floor(rnd() * LANES);
-      if (lane2 === nMain.lane) lane2 = (lane2 + 2) % LANES;
-      extra.push({ time: nMain.time, lane: lane2, strength: nMain.strength });
-      quota--;
-    }
-    notes.push(...extra);
-  }
-
   notes.sort((a, b) => a.time - b.time || a.lane - b.lane);
   return notes;
 }
@@ -677,13 +803,17 @@ function makeDemoTrack(ctx) {
     const s0 = Math.floor(t * sr), n = Math.floor(len * sr);
     for (let i = 0; i < n && s0 + i < L.length; i++) {
       const tt = i / sr;
-      const envl = Math.exp(-tt / (len * 0.3)) * (1 - tt / len);
+      const envl = shape === "pad"
+        ? Math.min(tt / 0.04, 1) * Math.pow(Math.max(0, 1 - tt / len), 0.6) // flat sustain for hold notes
+        : Math.exp(-tt / (len * 0.3)) * (1 - tt / len);
       let v;
       if (shape === "kick") {
         const f = 160 * Math.exp(-tt * 22) + 45;
         v = Math.sin(2 * Math.PI * f * tt * (1 + 0.5 * Math.exp(-tt * 30)));
       } else if (shape === "noise") {
         v = Math.random() * 2 - 1;
+      } else if (shape === "pad") {
+        v = Math.sin(2 * Math.PI * freq * tt) + 0.35 * Math.sin(4 * Math.PI * freq * tt) + 0.15 * Math.sin(6 * Math.PI * freq * tt);
       } else {
         v = Math.sin(2 * Math.PI * freq * tt) + 0.28 * Math.sin(4 * Math.PI * freq * tt);
       }
@@ -711,10 +841,23 @@ function makeDemoTrack(ctx) {
     [261.63, 329.63, 392.0],   // C major
     [196.0, 246.94, 293.66],   // G major
   ];
+  // song structure: A A | B B | C (pad breakdown) | B — gives the repetition
+  // detector real sections and the hold generator sustained material
   for (let b = 0; b < beats; b++) {
     const t = 0.5 + b * spb;
     const bar = Math.floor(b / 4);
     const chord = Math.floor(bar / 2) % 4;
+    const section = bar < 8 ? 0 : bar < 16 ? 1 : bar < 20 ? 2 : 1;
+    if (section === 2) {
+      // breakdown: one kick per bar over long sustained pads
+      if (b % 4 === 0) {
+        addTone(t, 0, 0.30, 0.85, "kick");
+        addTone(t, roots[chord] * 2, spb * 3.8, 0.20, "pad");
+        addTone(t, chordTones[chord][0], spb * 3.8, 0.16, "pad");
+        addTone(t, chordTones[chord][2], spb * 3.8, 0.13, "pad");
+      }
+      continue;
+    }
     addTone(t, 0, 0.30, 0.85, "kick");                       // kick on every beat
     if (b % 4 === 1 || b % 4 === 3) addTone(t, 0, 0.18, 0.35, "noise"); // snare on 2 & 4
     addHat(t, 0.05, 0.22);
@@ -722,8 +865,8 @@ function makeDemoTrack(ctx) {
     // bass: root eighths
     addTone(t, roots[chord], 0.22, 0.30);
     addTone(t + spb / 2, roots[chord] * (b % 4 === 3 ? 1.5 : 1), 0.18, 0.22);
-    // arp lead from bar 4 on
-    if (bar >= 4) {
+    // arp lead in the B sections
+    if (section === 1) {
       const tones = chordTones[chord];
       addTone(t, tones[b % 3], 0.16, 0.13);
       addTone(t + spb / 2, tones[(b + 1) % 3], 0.14, 0.10);
@@ -957,8 +1100,9 @@ const G = {
   notes: [], cursors: [0, 0, 0, 0],
   startCtx: 0, leadIn: 2.2, songTime: -99,
   source: null, running: false, paused: false, over: false,
-  score: 0, combo: 0, maxCombo: 0,
+  score: 0, combo: 0, maxCombo: 0, mult: 1, maxMult: 1,
   counts: { perfect: 0, great: 0, good: 0, miss: 0 },
+  holdsOk: 0, holdsTotal: 0, activeHolds: [null, null, null, null],
   errSum: 0, errN: 0,
   particles: [], hitFlashes: [0, 0, 0, 0], pressed: [false, false, false, false],
   raf: 0, endAt: 0,
@@ -971,14 +1115,23 @@ function startGame() {
   loading(true, "Building beatmap…");
   setTimeout(() => {
     const base = generateNotes(S.difficulty);
-    G.notes = base.map(n => ({ time: n.time, lane: n.lane, hit: false, missed: false, judged: false }));
+    G.notes = base.map(n => ({
+      time: n.time, lane: n.lane, dur: n.dur || 0,
+      hit: false, missed: false, judged: false,
+      holdState: null, releasedAt: null, graceUntil: 0,
+    }));
     G.cursors = [0, 0, 0, 0];
-    G.score = 0; G.combo = 0; G.maxCombo = 0;
+    G.score = 0; G.combo = 0; G.maxCombo = 0; G.mult = 1; G.maxMult = 1;
     G.counts = { perfect: 0, great: 0, good: 0, miss: 0 };
+    G.holdsOk = 0;
+    G.holdsTotal = G.notes.filter(n => n.dur > 0).length;
+    G.activeHolds = [null, null, null, null];
     G.errSum = 0; G.errN = 0;
     G.particles = []; G.hitFlashes = [0, 0, 0, 0];
+    G.pressed = [false, false, false, false];
     G.paused = false; G.over = false; G.songTime = -99;
-    G.endAt = Math.min(S.buffer.duration, (G.notes.length ? G.notes[G.notes.length - 1].time : 0) + 2.0);
+    const lastEnd = G.notes.reduce((m, n) => Math.max(m, n.time + n.dur), 0);
+    G.endAt = Math.min(S.buffer.duration, lastEnd + 2.0);
 
     const src = ctx.createBufferSource();
     src.buffer = S.buffer;
@@ -991,6 +1144,8 @@ function startGame() {
     $("hudScore").textContent = "0";
     $("hudAcc").textContent = "100.0%";
     $("hudCombo").textContent = "";
+    $("hudMult").textContent = "x1";
+    $("hudMult").style.color = "var(--dim)";
     $("hudDiff").textContent = `${DIFFS[S.difficulty].name} · ${S.songName}`;
     $("pauseOverlay").classList.remove("active");
     loading(false);
@@ -1019,6 +1174,10 @@ function resumeGame() {
   G.paused = false;
   $("pauseOverlay").classList.remove("active");
   S.ctx.resume();
+  // players let go of the keys while paused — give active holds a re-press grace
+  for (const h of G.activeHolds) {
+    if (h) { h.graceUntil = G.songTime + 0.6; h.releasedAt = null; }
+  }
 }
 
 function songTimeNow() {
@@ -1027,31 +1186,15 @@ function songTimeNow() {
 }
 
 /* scoring */
-function applyJudgment(kind, note, err) {
-  note.judged = true;
+function judgePopup(text, color) {
   const el = $("hudJudge");
-  if (kind === "miss") {
-    note.missed = true;
-    G.counts.miss++;
-    G.combo = 0;
-    el.style.color = MISS_COLOR;
-    el.textContent = "MISS";
-  } else {
-    const j = JUDGE[kind];
-    note.hit = true;
-    G.counts[kind]++;
-    G.combo++;
-    if (G.combo > G.maxCombo) G.maxCombo = G.combo;
-    G.score += Math.round(j.score * (1 + Math.min(G.combo, 100) * 0.01));
-    G.errSum += err; G.errN++;
-    el.style.color = j.color;
-    el.textContent = j.label;
-    spawnHitEffect(note.lane, kind);
-  }
+  el.style.color = color;
+  el.textContent = text;
   el.classList.remove("show");
   void el.offsetWidth;
   el.classList.add("show");
-
+}
+function refreshComboHud() {
   const cEl = $("hudCombo");
   if (G.combo >= 2) {
     cEl.textContent = G.combo;
@@ -1067,10 +1210,80 @@ function applyJudgment(kind, note, err) {
   const acc = total ? (G.counts.perfect * 1 + G.counts.great * 0.65 + G.counts.good * 0.30) / total * 100 : 100;
   $("hudAcc").textContent = acc.toFixed(1) + "%";
 }
+function updateMultiplier() {
+  let m = 1;
+  for (const tier of MULT_TIERS) if (G.combo >= tier.combo) { m = tier.mult; break; }
+  if (m !== G.mult) {
+    G.mult = m;
+    const el = $("hudMult");
+    el.textContent = "x" + m;
+    el.style.color = m >= 10 ? "var(--lane1)" : m >= 4 ? "var(--lane3)" : m >= 2 ? "var(--lane2)" : "var(--dim)";
+    el.classList.remove("pop");
+    void el.offsetWidth;
+    el.classList.add("pop");
+  }
+  if (m > G.maxMult) G.maxMult = m;
+}
+function applyJudgment(kind, note, err) {
+  note.judged = true;
+  if (kind === "miss") {
+    note.missed = true;
+    G.counts.miss++;
+    G.combo = 0;
+    updateMultiplier();
+    judgePopup("MISS", MISS_COLOR);
+  } else {
+    const j = JUDGE[kind];
+    // settle any hold still occupying this lane before it changes hands
+    if (note.dur > 0) {
+      const prev = G.activeHolds[note.lane];
+      if (prev && prev !== note) {
+        if (prev.time + prev.dur - (note.time + err) <= 0.25) completeHold(prev, note.lane);
+        else breakHold(prev, note.lane);
+      }
+    }
+    note.hit = true;
+    G.counts[kind]++;
+    G.combo++;
+    if (G.combo > G.maxCombo) G.maxCombo = G.combo;
+    updateMultiplier();
+    G.score += Math.round(j.score * G.mult);
+    G.errSum += err; G.errN++;
+    judgePopup(j.label, j.color);
+    spawnHitEffect(note.lane, kind);
+    if (note.dur > 0) { // hold head caught — the hold is now live
+      note.holdState = "active";
+      note.releasedAt = null;
+      G.activeHolds[note.lane] = note;
+    }
+  }
+  refreshComboHud();
+}
+function completeHold(note, lane) {
+  note.holdState = "done";
+  G.activeHolds[lane] = null;
+  G.holdsOk++;
+  G.combo++;
+  if (G.combo > G.maxCombo) G.maxCombo = G.combo;
+  updateMultiplier();
+  G.score += Math.round(HOLD_TICK_SCORE * G.mult);
+  judgePopup("HOLD ✓", "#ffffff");
+  spawnHitEffect(lane, "perfect");
+  refreshComboHud();
+}
+function breakHold(note, lane) {
+  note.holdState = "broken";
+  G.activeHolds[lane] = null;
+  G.combo = 0;
+  updateMultiplier();
+  judgePopup("BREAK", MISS_COLOR);
+  refreshComboHud();
+}
 
 function handleLanePress(lane) {
-  if (!G.running || G.paused || G.over) return;
-  G.pressed[lane] = true;
+  if (!G.running || G.over) return;
+  G.pressed[lane] = true; // track key state even while paused, so held keys survive resume
+  if (G.paused) return;
   G.hitFlashes[lane] = 1;
   const t = songTimeNow(); // sample the clock at event time, not the last frame's cached value
   // nearest unjudged note in this lane within the good window
@@ -1165,6 +1378,26 @@ function gameLoop() {
     G.cursors[lane] = ci;
   }
 
+  // active holds: the key must stay down until the tail (short release grace)
+  for (let lane = 0; lane < LANES; lane++) {
+    const h = G.activeHolds[lane];
+    if (!h) continue;
+    const tail = h.time + h.dur;
+    if (t >= tail) { completeHold(h, lane); continue; }
+    if (t < (h.graceUntil || 0)) continue;
+    if (!G.pressed[lane]) {
+      if (h.releasedAt == null) h.releasedAt = t;
+      else if (t - h.releasedAt > 0.15) {
+        // forgiveness scales with hold length so short holds still demand holding
+        const endGrace = Math.min(0.25, h.dur * 0.3);
+        if (tail - h.releasedAt <= endGrace) completeHold(h, lane); // let go right at the end: counts
+        else breakHold(h, lane);
+      }
+    } else {
+      h.releasedAt = null;
+    }
+  }
+
   /* ---- draw ---- */
   cx.clearRect(0, 0, W, H);
 
@@ -1204,18 +1437,41 @@ function gameLoop() {
       press ? "#ffffff" : "rgba(255,255,255,0.45)", 3.5,
       press ? LANE_COLORS[l] : null);
   }
-  // notes
+  // notes & hold trails
   const spawnY = -noteSize * 2;
+  const yFor = tp => spawnY + (receptorY - spawnY) * (1 - (tp - t) / speedTime);
   for (const n of G.notes) {
-    if (n.judged && n.hit) continue;
-    const until = n.time - t;
-    if (until > speedTime) break;
-    const p = 1 - until / speedTime;
-    const y = spawnY + (receptorY - spawnY) * p;
-    if (y > H + noteSize * 2) continue;
-    const missedFade = n.missed ? 0.25 : 1;
-    cx.globalAlpha = missedFade;
-    drawArrow(x0 + laneW * (n.lane + 0.5), y, noteSize, LANE_ANGLES[n.lane],
+    if (n.time - t > speedTime) break; // heads are sorted; the rest are off-screen
+    const isHold = n.dur > 0;
+    const x = x0 + laneW * (n.lane + 0.5);
+    if (isHold && n.holdState !== "done") {
+      const tailT = n.time + n.dur;
+      const yTail = yFor(tailT);
+      // active & broken trails stay pinned at the receptor; missed ones scroll past
+      const yHead = (n.holdState === "active" || n.holdState === "broken") ? receptorY : yFor(n.time);
+      if (yTail < H + 20 && yHead - yTail > 2) {
+        const w = noteSize * 0.8;
+        cx.globalAlpha = n.holdState === "broken" ? 0.15 : n.missed ? 0.2 : n.holdState === "active" ? 0.9 : 0.55;
+        cx.fillStyle = LANE_COLORS[n.lane];
+        cx.beginPath();
+        if (cx.roundRect) cx.roundRect(x - w / 2, yTail, w, yHead - yTail, Math.min(w / 2, (yHead - yTail) / 2));
+        else cx.rect(x - w / 2, yTail, w, yHead - yTail);
+        cx.fill();
+        cx.globalAlpha = 1;
+      }
+    }
+    if (n.judged && n.hit) {
+      // hit heads vanish; an active hold keeps a pulsing arrow pinned to the receptor
+      if (isHold && n.holdState === "active") {
+        const pulse = 1 + 0.08 * Math.sin(t * 18);
+        drawArrow(x, receptorY, noteSize * pulse, LANE_ANGLES[n.lane], "#ffffff", LANE_COLORS[n.lane], 3, LANE_COLORS[n.lane]);
+      }
+      continue;
+    }
+    const y = yFor(n.time);
+    if (y > H + noteSize * 2 && !isHold) continue;
+    cx.globalAlpha = n.missed ? 0.25 : 1;
+    drawArrow(x, y, noteSize, LANE_ANGLES[n.lane],
       LANE_COLORS[n.lane], "rgba(255,255,255,0.85)", 2, LANE_COLORS[n.lane]);
     cx.globalAlpha = 1;
   }
@@ -1270,9 +1526,11 @@ function showResults() {
   $("resGood").textContent = c.good;
   $("resMiss").textContent = c.miss;
   $("resCombo").textContent = G.maxCombo;
+  $("resMult").textContent = "x" + G.maxMult;
+  $("resHolds").textContent = G.holdsTotal ? `${G.holdsOk}/${G.holdsTotal}` : "—";
   $("resAcc").textContent = acc.toFixed(2) + "%";
   $("resScore").textContent = G.score.toLocaleString();
-  $("resFC").style.display = (total > 0 && c.miss === 0) ? "block" : "none";
+  $("resFC").style.display = (total > 0 && c.miss === 0 && G.holdsOk === G.holdsTotal) ? "block" : "none";
   const avgErr = G.errN ? (G.errSum / G.errN) * 1000 : 0;
   $("resHint").textContent = Math.abs(avgErr) > 25 && G.errN >= 10
     ? `You hit on average ${Math.abs(Math.round(avgErr))} ms ${avgErr > 0 ? "late" : "early"} — try setting Audio offset to ${avgErr > 0 ? "+" : "-"}${Math.min(200, Math.abs(Math.round(avgErr)))} ms on the difficulty screen.`
@@ -1368,7 +1626,9 @@ window.addEventListener("DOMContentLoaded", () => {
     loading(true, "Preparing difficulties…");
     setTimeout(() => {
       for (const key of Object.keys(DIFFS)) {
-        $("cnt-" + key).textContent = generateNotes(key).length + " notes";
+        const g = generateNotes(key);
+        const holds = g.filter(n => n.dur > 0).length;
+        $("cnt-" + key).textContent = `${g.length} notes · ${holds} holds`;
       }
       loading(false);
       show("scr-diff");
@@ -1392,7 +1652,10 @@ window.addEventListener("DOMContentLoaded", () => {
   $("btnNewSong").addEventListener("click", () => show("scr-home"));
 
   window.addEventListener("resize", () => { if (canvas) resizeCanvas(); });
-  window.addEventListener("blur", () => { if (G.running && !G.over) pauseGame(); });
+  window.addEventListener("blur", () => {
+    G.pressed = [false, false, false, false]; // keyups are lost while unfocused
+    if (G.running && !G.over) pauseGame();
+  });
   document.addEventListener("visibilitychange", () => { if (document.hidden && G.running && !G.over) pauseGame(); });
 
   /* keyboard */
