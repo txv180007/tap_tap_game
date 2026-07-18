@@ -1,0 +1,12 @@
+{
+  "name": "beat-dance",
+  "version": "1.0.0",
+  "description": "Browser rhythm game with custom song upload, tap-tempo sync, and LAN/Tailscale multiplayer",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

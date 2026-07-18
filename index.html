@@ -194,6 +194,31 @@
   .fc { color: var(--lane3); font-weight: 800; letter-spacing: 0.1em; }
 
   .backlink { position: absolute; top: 20px; left: 20px; }
+
+  /* multiplayer */
+  .diffcard.selected { border-color: var(--accent); box-shadow: 0 0 18px rgba(35,230,255,0.35); }
+  .diffcard { position: relative; }
+  .oppbadge {
+    position: absolute; top: 8px; right: 8px;
+    font-size: 10px; font-weight: 800; letter-spacing: 0.1em;
+    background: var(--lane1); color: #fff;
+    border-radius: 6px; padding: 2px 6px;
+    display: none;
+  }
+  #mpBanner {
+    top: 12%; left: 50%; transform: translateX(-50%);
+    font-size: 22px; font-weight: 800; color: var(--lane1);
+    background: rgba(5,5,12,0.8); border: 1px solid rgba(255,61,160,0.5);
+    border-radius: 12px; padding: 10px 22px;
+  }
+  #mpQuitOverlay {
+    position: absolute; inset: 0; display: none;
+    background: rgba(5,5,12,0.82); backdrop-filter: blur(6px);
+    flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+    z-index: 5;
+  }
+  #mpQuitOverlay.active { display: flex; }
+  #mpQuitOverlay h2 { font-size: 40px; font-weight: 900; letter-spacing: 0.15em; }
   #loading {
     position: absolute; inset: 0; z-index: 50; display: none;
     align-items: center; justify-content: center; flex-direction: column; gap: 14px;
@@ -218,12 +243,39 @@
     <div class="big">Drop your MP3 / FLAC here</div>
     <div class="sub">or click to browse &middot; wav / ogg / m4a work too</div>
   </div>
-  <button class="btn" id="btnDemo">&#9835; Play built-in demo track</button>
+  <div class="row">
+    <button class="btn" id="btnDemo">&#9835; Play built-in demo track</button>
+    <button class="btn" id="btnMp">&#9876; Multiplayer</button>
+  </div>
   <div class="hint">
     Play with <span class="key">&larr;</span><span class="key">&darr;</span><span class="key">&uarr;</span><span class="key">&rarr;</span>
     or <span class="key">D</span><span class="key">F</span><span class="key">J</span><span class="key">K</span>
     &nbsp;&middot;&nbsp; <span class="key">Esc</span> to pause
   </div>
+</div>
+
+<!-- ==================== MULTIPLAYER LOBBY ==================== -->
+<div class="screen" id="scr-mp">
+  <button class="btn small backlink" id="mpBack">&larr; Leave</button>
+  <h2 style="font-size:30px; font-weight:800;">MULTIPLAYER</h2>
+  <div class="panel col" style="min-width: min(460px, 90vw);">
+    <div class="label">Players</div>
+    <div id="mpPlayers" class="statline">connecting&hellip;</div>
+    <div class="row">
+      <input id="mpName" class="bpmedit" style="font-size:16px; width:170px;" maxlength="24" placeholder="your name">
+      <button class="btn small" id="mpSetName">Set name</button>
+    </div>
+  </div>
+  <div class="panel col" style="min-width: min(460px, 90vw);">
+    <div class="label">Song</div>
+    <div id="mpSongStatus" class="statline">no song yet &mdash; either player can pick one</div>
+    <div class="row">
+      <button class="btn" id="mpUpload">Upload MP3/FLAC</button>
+      <button class="btn" id="mpDemo">&#9835; Demo track</button>
+      <button class="btn primary" id="mpToDiff" style="display:none;">Pick difficulty &rarr;</button>
+    </div>
+  </div>
+  <div class="hint" id="mpHint">The song owner sets the tempo; the chart is shared automatically.<br>Both players pick their own difficulty, then hit READY.</div>
 </div>
 
 <!-- ==================== SYNC / TAP TEMPO ==================== -->
@@ -272,25 +324,33 @@
   <h2 style="font-size:30px; font-weight:800;">Choose difficulty</h2>
   <div class="diffgrid" id="diffGrid">
     <div class="diffcard" data-diff="easy">
+      <div class="oppbadge">OPP</div>
       <div class="dname" style="color:var(--lane2)">EASY</div>
       <div class="dsub">on-beat steps</div>
       <div class="dnotes" id="cnt-easy">–</div>
     </div>
     <div class="diffcard" data-diff="normal">
+      <div class="oppbadge">OPP</div>
       <div class="dname" style="color:var(--lane0)">NORMAL</div>
       <div class="dsub">eighth notes</div>
       <div class="dnotes" id="cnt-normal">–</div>
     </div>
     <div class="diffcard" data-diff="hard">
+      <div class="oppbadge">OPP</div>
       <div class="dname" style="color:var(--lane3)">HARD</div>
       <div class="dsub">sixteenths &amp; jumps</div>
       <div class="dnotes" id="cnt-hard">–</div>
     </div>
     <div class="diffcard" data-diff="expert">
+      <div class="oppbadge">OPP</div>
       <div class="dname" style="color:var(--lane1)">EXPERT</div>
       <div class="dsub">dense streams</div>
       <div class="dnotes" id="cnt-expert">–</div>
     </div>
+  </div>
+  <div class="row" id="diffMpBar" style="display:none;">
+    <button class="btn primary" id="btnMpReady" disabled>READY</button>
+    <span class="statline" id="mpDiffStatus">pick a difficulty</span>
   </div>
   <div class="panel col" style="gap:14px;">
     <div class="sliderrow">
@@ -321,18 +381,27 @@
   <div class="hud" id="hudCombo"></div>
   <div class="hud" id="hudJudge"></div>
   <div class="hud" id="hudCountdown"></div>
+  <div class="hud" id="mpBanner" style="display:none;"></div>
   <div id="pauseOverlay">
     <h2>PAUSED</h2>
     <button class="btn primary" id="btnResume">Resume</button>
     <button class="btn" id="btnRestart">Restart</button>
     <button class="btn" id="btnQuit">Quit to menu</button>
   </div>
+  <div id="mpQuitOverlay">
+    <h2>FORFEIT?</h2>
+    <div class="hint" style="margin-top:-8px;">The match keeps running behind this menu.</div>
+    <button class="btn primary" id="btnMpKeepPlaying">Keep playing</button>
+    <button class="btn" id="btnMpForfeit">Forfeit match</button>
+  </div>
 </div>
 
 <!-- ==================== RESULTS ==================== -->
 <div class="screen" id="scr-results">
+  <div id="resWinner" style="display:none; font-size:30px; font-weight:900; letter-spacing:0.08em;"></div>
   <div class="grade" id="resGrade">S</div>
   <div class="fc" id="resFC" style="display:none;">&#9733; FULL COMBO &#9733;</div>
+  <div class="row" style="align-items: stretch;">
   <div class="panel">
     <div class="resgrid">
       <span style="color:var(--accent)">Perfect</span><span class="v" id="resPerfect">0</span>
@@ -346,11 +415,23 @@
       <span>Score</span><span class="v" id="resScore">0</span>
     </div>
   </div>
+  <div class="panel" id="resOppPanel" style="display:none;">
+    <div style="font-weight:800; margin-bottom:10px;" id="resOppName">Opponent</div>
+    <div class="resgrid">
+      <span>Difficulty</span><span class="v" id="resOppDiff">&mdash;</span>
+      <span>Score</span><span class="v" id="resOppScore">&mdash;</span>
+      <span>Accuracy</span><span class="v" id="resOppAcc">&mdash;</span>
+      <span>Max combo</span><span class="v" id="resOppCombo">&mdash;</span>
+      <span style="color:var(--lane1)">Miss</span><span class="v" id="resOppMiss">&mdash;</span>
+    </div>
+  </div>
+  </div>
   <div class="hint" id="resHint"></div>
   <div class="row">
     <button class="btn primary" id="btnRetry">Retry</button>
     <button class="btn" id="btnChangeDiff">Change difficulty</button>
     <button class="btn" id="btnNewSong">New song</button>
+    <button class="btn primary" id="btnMpLobby" style="display:none;">Back to lobby</button>
   </div>
 </div>
 
@@ -416,6 +497,8 @@ const S = {
   bpm: null,
   beatOffset: 0,         // song time (s) of a beat anchor
   taps: [],
+  songFile: null,        // original File, kept for multiplayer sharing
+  isDemo: false,
   difficulty: "normal",
   settings: { speed: 5, volume: 90, offsetMs: 0 },
 };
@@ -882,6 +965,8 @@ function makeDemoTrack(ctx) {
    ===================================================================== */
 async function loadFile(file) {
   const ctx = ensureCtx();
+  S.songFile = file; // kept for multiplayer sharing
+  S.isDemo = false;
   loading(true, `Decoding ${file.name}…`);
   try {
     const arr = await file.arrayBuffer();
@@ -1106,14 +1191,327 @@ const G = {
 };
 let canvas, cx;
 
-function startGame() {
+/* =====================================================================
+   MULTIPLAYER — one 2-player room relayed by server.js.
+   The song owner shares audio + pre-generated charts; both clients
+   schedule the same start instant via an NTP-lite clock offset.
+   ===================================================================== */
+const MP = {
+  active: false, inGame: false,
+  ws: null, connected: false, slot: null,
+  myName: "Player", oppName: null,
+  offset: 0, offsetReady: false, bestRtt: Infinity, pingsLeft: 0,
+  meta: null,          // { demo, name, bpm, beatOffset, charts }
+  songReady: false, owner: false,
+  myDiff: null, myReady: false,
+  oppDiff: null, oppReady: false,
+  opp: null,           // in-game opponent mirror
+  oppFinished: null, myStats: null, oppLeft: false,
+};
+
+function mpSend(obj) {
+  if (MP.ws && MP.ws.readyState === WebSocket.OPEN) MP.ws.send(JSON.stringify(obj));
+}
+
+function mpConnect() {
+  let ws;
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  try { ws = new WebSocket(`${proto}//${location.host}/ws`); }
+  catch (e) { $("mpPlayers").textContent = "connection failed — is server.js running?"; return; }
+  MP.ws = ws;
+  ws.onopen = () => {
+    MP.connected = true;
+    mpSend({ type: "hello", name: MP.myName });
+    MP.offsetReady = false; MP.bestRtt = Infinity; MP.pingsLeft = 8;
+    mpPing();
+    mpRenderRoom();
+  };
+  ws.onmessage = e => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch (err) { return; }
+    mpHandle(msg);
+  };
+  ws.onclose = () => {
+    MP.connected = false;
+    if (MP.active && !MP.inGame) $("mpPlayers").textContent = "disconnected — reload the page to retry";
+  };
+  ws.onerror = () => { /* onclose follows */ };
+}
+
+function mpPing() {
+  if (!MP.connected || MP.pingsLeft <= 0) { MP.offsetReady = true; return; }
+  MP.pingsLeft--;
+  mpSend({ type: "ping", t0: performance.now() });
+  setTimeout(mpPing, 60);
+}
+
+// map a server timestamp (ms) onto the local AudioContext clock (s)
+function mpCtxTimeFor(serverT) {
+  const perfNow = performance.now();
+  const ctxNow = S.ctx.currentTime;
+  return ctxNow + (serverT - MP.offset - perfNow) / 1000;
+}
+
+function mpHandle(msg) {
+  switch (msg.type) {
+    case "pong": {
+      const t1 = performance.now();
+      const rtt = t1 - msg.t0;
+      if (rtt < MP.bestRtt) {
+        MP.bestRtt = rtt;
+        MP.offset = msg.serverTime + rtt / 2 - t1; // serverTime = perfTime + offset
+      }
+      break;
+    }
+    case "welcome":
+      MP.slot = msg.slot;
+      break;
+    case "room": {
+      const opp = MP.slot != null ? msg.players[1 - MP.slot] : null;
+      MP.oppName = opp ? opp.name : null;
+      MP.oppDiff = opp ? opp.diff : null;
+      MP.oppReady = opp ? !!opp.ready : false;
+      mpRenderRoom();
+      mpRenderDiffUi();
+      break;
+    }
+    case "room-full":
+      alert("That room already has two players.");
+      mpLeave();
+      break;
+    case "songMeta":
+      mpReceiveSong(msg.meta);
+      break;
+    case "start":
+      mpStartMatch(msg.serverTime);
+      break;
+    case "judge": mpApplyOppJudge(msg); break;
+    case "hold": mpApplyOppHold(msg); break;
+    case "finish":
+      MP.oppFinished = msg.stats;
+      if ($("scr-results").classList.contains("active")) mpFillOppResults();
+      break;
+    case "quit":
+      MP.oppLeft = true; // forfeited: results show them as gone (name preserved)
+      if (MP.inGame) mpShowBanner("Opponent forfeited — finish your run!");
+      if ($("scr-results").classList.contains("active")) mpFillOppResults();
+      break;
+    case "opp-left":
+      MP.oppLeft = true;
+      MP.oppName = null; MP.oppDiff = null; MP.oppReady = false;
+      if (MP.inGame) mpShowBanner("Opponent disconnected — finish your run!");
+      else { mpRenderRoom(); mpRenderDiffUi(); }
+      if ($("scr-results").classList.contains("active")) mpFillOppResults();
+      break;
+  }
+}
+
+function mpShowBanner(text) {
+  const el = $("mpBanner");
+  el.textContent = text;
+  el.style.display = "block";
+  setTimeout(() => { el.style.display = "none"; }, 4000);
+}
+
+function mpRenderRoom() {
+  const el = $("mpPlayers");
+  if (!MP.connected) { el.textContent = "connecting…"; return; }
+  el.textContent = `You: ${MP.myName}` + (MP.oppName ? `  ·  Opponent: ${MP.oppName}` : "  ·  waiting for opponent to join…");
+}
+
+function mpRenderSong() {
+  const el = $("mpSongStatus");
+  if (!MP.meta) {
+    el.innerHTML = "no song yet &mdash; either player can pick one";
+    $("mpToDiff").style.display = "none";
+    return;
+  }
+  const who = MP.owner ? "you" : (MP.oppName || "opponent");
+  el.textContent = `${MP.meta.name} · ${MP.meta.bpm} BPM (picked by ${who})` + (MP.songReady ? "" : " — preparing…");
+  $("mpToDiff").style.display = MP.songReady ? "" : "none";
+}
+
+function mpEnterLobby() {
+  MP.active = true;
+  MP.meta = null; MP.songReady = false; MP.owner = false;
+  MP.myDiff = null; MP.myReady = false; MP.oppDiff = null; MP.oppReady = false;
+  MP.opp = null; MP.oppFinished = null; MP.myStats = null; MP.oppLeft = false;
+  $("mpName").value = MP.myName;
+  mpRenderRoom();
+  mpRenderSong();
+  show("scr-mp");
+  if (!MP.ws || MP.ws.readyState === WebSocket.CLOSING || MP.ws.readyState === WebSocket.CLOSED) mpConnect();
+}
+
+function mpShowLobby() {
+  MP.myReady = false; MP.myDiff = null;
+  mpRenderRoom();
+  mpRenderSong();
+  show("scr-mp");
+}
+
+function mpLeave() {
+  if (MP.ws) {
+    MP.ws.onclose = null;
+    try { MP.ws.close(); } catch (e) { /* already closed */ }
+  }
+  MP.ws = null; MP.connected = false; MP.slot = null;
+  MP.active = false; MP.inGame = false;
+  show("scr-home");
+}
+
+function mpReceiveSong(meta) {
+  MP.meta = meta;
+  MP.owner = false;
+  MP.songReady = false;
+  MP.myDiff = null; MP.myReady = false;
+  mpRenderSong();
+  const ctx = ensureCtx();
+  const finish = buffer => {
+    stopGame();
+    stopSyncPlayback();
+    S.buffer = buffer;
+    S.songName = meta.name;
+    S.bpm = meta.bpm;
+    S.beatOffset = meta.beatOffset;
+    S.isDemo = !!meta.demo;
+    S.songFile = null;
+    MP.songReady = true;
+    loading(false);
+    mpRenderSong();
+    if ($("scr-mp").classList.contains("active")) { mpFillDiffLabels(); mpShowDiff(); }
+  };
+  if (meta.demo) {
+    loading(true, "Building demo track…");
+    setTimeout(() => finish(makeDemoTrack(ctx)), 30);
+  } else {
+    loading(true, "Downloading song…");
+    fetch("/song")
+      .then(r => { if (!r.ok) throw new Error("song not on server"); return r.arrayBuffer(); })
+      .then(ab => ctx.decodeAudioData(ab))
+      .then(finish)
+      .catch(err => {
+        loading(false);
+        $("mpSongStatus").textContent = "download failed: " + err.message;
+      });
+  }
+}
+
+function mpFillDiffLabels() {
+  for (const key of Object.keys(DIFFS)) {
+    const g = MP.meta.charts[key] || [];
+    const holds = g.filter(n => n.dur > 0).length;
+    $("cnt-" + key).textContent = `${g.length} notes · ${holds} holds`;
+  }
+}
+
+function mpShowDiff() {
+  $("diffMpBar").style.display = "";
+  $("btnMpReady").disabled = !MP.myDiff;
+  $("btnMpReady").textContent = MP.myReady ? "WAITING…" : "READY";
+  mpRenderDiffUi();
+  show("scr-diff");
+}
+
+function mpRenderDiffUi() {
+  document.querySelectorAll(".diffcard").forEach(card => {
+    card.classList.toggle("selected", MP.active && card.dataset.diff === MP.myDiff);
+    const badge = card.querySelector(".oppbadge");
+    if (badge) badge.style.display = (MP.active && MP.oppDiff === card.dataset.diff) ? "block" : "none";
+  });
+  if (!MP.active) return;
+  const st = $("mpDiffStatus");
+  const oppTxt = MP.oppName
+    ? (MP.oppReady ? `${MP.oppName} is READY` : `${MP.oppName} is picking…`)
+    : "waiting for opponent to join…";
+  st.textContent = MP.myReady ? `waiting — ${oppTxt}` : (MP.myDiff ? oppTxt : "pick a difficulty · " + oppTxt);
+}
+
+function mpStartMatch(serverT) {
+  ensureCtx();
+  const oppChart = (MP.meta && MP.meta.charts[MP.oppDiff || MP.myDiff]) || [];
+  MP.opp = {
+    notes: oppChart.map((n, i) => ({
+      idx: i, time: n.time, lane: n.lane, dur: n.dur || 0,
+      hit: false, missed: false, judged: false, holdState: null,
+    })),
+    pressed: [false, false, false, false],
+    hitFlashes: [0, 0, 0, 0],
+    combo: 0, score: 0, mult: 1, maxCombo: 0, missCount: 0,
+    diff: MP.oppDiff, name: MP.oppName,
+  };
+  MP.myReady = false; MP.oppReady = false;
+  MP.oppFinished = null; MP.myStats = null; MP.oppLeft = false;
+  MP.inGame = true;
+  S.difficulty = MP.myDiff;
+  startGame({ ctxStart: mpCtxTimeFor(serverT) });
+}
+
+function mpApplyOppJudge(msg) {
+  const o = MP.opp;
+  if (!o) return;
+  const n = o.notes[msg.idx];
+  if (n && !n.judged) {
+    n.judged = true;
+    if (msg.kind === "miss") { n.missed = true; o.missCount++; }
+    else {
+      n.hit = true;
+      o.hitFlashes[n.lane] = 1;
+      if (n.dur > 0) n.holdState = "active";
+      if (G.running && (msg.kind === "perfect" || msg.kind === "great")) {
+        const g = oppGeometry();
+        G.particles.push({ x: g.x0 + g.laneW * (n.lane + 0.5), y: g.receptorY, ring: true, life: 0.3, t: 0, col: LANE_COLORS[n.lane] });
+      }
+    }
+  }
+  o.combo = msg.combo; o.score = msg.score; o.mult = msg.mult;
+  if (o.combo > o.maxCombo) o.maxCombo = o.combo;
+}
+
+function mpApplyOppHold(msg) {
+  const o = MP.opp;
+  if (!o) return;
+  const n = o.notes[msg.idx];
+  if (n) n.holdState = msg.ok ? "done" : "broken";
+  o.combo = msg.combo; o.score = msg.score; o.mult = msg.mult;
+  if (o.combo > o.maxCombo) o.maxCombo = o.combo;
+}
+
+function mpFillOppResults() {
+  const s = MP.oppFinished;
+  $("resOppName").textContent = (s && s.name) || MP.oppName || "Opponent";
+  if (!s) {
+    $("resOppDiff").textContent = "…";
+    $("resOppScore").textContent = MP.oppLeft ? "left the match" : "still playing…";
+    $("resOppAcc").textContent = "—";
+    $("resOppCombo").textContent = "—";
+    $("resOppMiss").textContent = "—";
+    $("resWinner").style.display = "none";
+    return;
+  }
+  $("resOppDiff").textContent = DIFFS[s.diff] ? DIFFS[s.diff].name : String(s.diff || "—");
+  $("resOppScore").textContent = (+s.score).toLocaleString();
+  $("resOppAcc").textContent = s.acc + "%";
+  $("resOppCombo").textContent = s.maxCombo;
+  $("resOppMiss").textContent = s.miss;
+  if (MP.myStats) {
+    const w = $("resWinner");
+    w.style.display = "block";
+    if (MP.myStats.score === +s.score) { w.textContent = "DRAW!"; w.style.color = "var(--dim)"; }
+    else if (MP.myStats.score > +s.score) { w.textContent = "YOU WIN!"; w.style.color = "var(--lane2)"; }
+    else { w.textContent = `${(s.name || "OPPONENT").toUpperCase()} WINS!`; w.style.color = "var(--lane1)"; }
+    if (MP.myStats.diff !== s.diff) w.textContent += " · different difficulties";
+  }
+}
+
+function startGame(opts = {}) {
   const ctx = ensureCtx();
   stopSyncPlayback();
   loading(true, "Building beatmap…");
   setTimeout(() => {
-    const base = generateNotes(S.difficulty);
-    G.notes = base.map(n => ({
-      time: n.time, lane: n.lane, dur: n.dur || 0,
+    const base = (MP.inGame && MP.meta) ? MP.meta.charts[MP.myDiff] : generateNotes(S.difficulty);
+    G.notes = base.map((n, i) => ({
+      idx: i, time: n.time, lane: n.lane, dur: n.dur || 0,
       hit: false, missed: false, judged: false,
       holdState: null, releasedAt: null, graceUntil: 0,
     }));
@@ -1134,7 +1532,11 @@ function startGame() {
     src.buffer = S.buffer;
     src.connect(S.master);
     G.source = src;
-    G.startCtx = ctx.currentTime + 0.1; // small margin so start is sample-accurate
+    if (opts.ctxStart && opts.ctxStart - G.leadIn > ctx.currentTime + 0.05) {
+      G.startCtx = opts.ctxStart - G.leadIn; // multiplayer: music begins at the shared instant
+    } else {
+      G.startCtx = ctx.currentTime + 0.1; // small margin so start is sample-accurate
+    }
     src.start(G.startCtx + G.leadIn);
     G.running = true;
 
@@ -1142,8 +1544,10 @@ function startGame() {
     $("hudScore").textContent = "0";
     $("hudAcc").textContent = "100.0%";
     $("hudCombo").textContent = "";
-    $("hudDiff").textContent = `${DIFFS[S.difficulty].name} · ${S.songName}`;
+    $("hudDiff").textContent = `${DIFFS[S.difficulty].name} · ${S.songName}` + (MP.inGame && MP.oppName ? ` · vs ${MP.oppName}` : "");
     $("pauseOverlay").classList.remove("active");
+    $("mpQuitOverlay").classList.remove("active");
+    $("mpBanner").style.display = "none";
     loading(false);
     show("scr-game");
     resizeCanvas();
@@ -1279,6 +1683,7 @@ function applyJudgment(kind, note, err) {
     }
   }
   refreshComboHud();
+  if (MP.inGame) mpSend({ type: "judge", idx: note.idx, kind, combo: G.combo, score: G.score, mult: G.mult });
 }
 function completeHold(note, lane) {
   note.holdState = "done";
@@ -1291,6 +1696,7 @@ function completeHold(note, lane) {
   judgePopup("HOLD ✓", "#ffffff");
   spawnHitEffect(lane, "perfect");
   refreshComboHud();
+  if (MP.inGame) mpSend({ type: "hold", idx: note.idx, ok: true, combo: G.combo, score: G.score, mult: G.mult });
 }
 function breakHold(note, lane) {
   note.holdState = "broken";
@@ -1299,6 +1705,7 @@ function breakHold(note, lane) {
   updateMultiplier();
   judgePopup("BREAK", MISS_COLOR);
   refreshComboHud();
+  if (MP.inGame) mpSend({ type: "hold", idx: note.idx, ok: false, combo: G.combo, score: G.score, mult: G.mult });
 }
 
 function handleLanePress(lane) {
@@ -1331,11 +1738,20 @@ function resizeCanvas() {
 }
 function laneGeometry() {
   const W = innerWidth, H = innerHeight;
+  if (MP.inGame) {
+    const laneW = Math.min(96, W / 11);
+    const totalW = laneW * LANES;
+    return { laneW, x0: W * 0.27 - totalW / 2, receptorY: H - Math.max(110, H * 0.15), H, W };
+  }
   const laneW = Math.min(130, W / 6);
   const totalW = laneW * LANES;
   const x0 = (W - totalW) / 2;
   const receptorY = H - Math.max(120, H * 0.16);
   return { laneW, x0, receptorY, H, W };
+}
+function oppGeometry() {
+  const g = laneGeometry();
+  return { ...g, x0: g.W * 0.73 - (g.laneW * LANES) / 2 };
 }
 function drawArrow(x, y, size, angle, fill, stroke, lw, glow) {
   cx.save();
@@ -1434,6 +1850,117 @@ function drawMeter(t, laneW, x0, receptorY, H) {
   cx.restore();
 }
 
+// draw one full runway (track, rails, receptors, notes, hold trails) for a
+// given geometry and player state — used for both self and the MP opponent
+function renderRunway(geom, st, t, dt, mult) {
+  const { laneW, x0, receptorY, H } = geom;
+  const noteSize = laneW * 0.36;
+  const speedTime = 2.6 - S.settings.speed * 0.2;
+
+  // lane track
+  cx.fillStyle = "rgba(255,255,255,0.03)";
+  cx.fillRect(x0, 0, laneW * LANES, H);
+  for (let l = 0; l <= LANES; l++) {
+    cx.fillStyle = "rgba(255,255,255,0.08)";
+    cx.fillRect(x0 + l * laneW, 0, 1, H);
+  }
+  // beat-flash side rails, tinted by this player's multiplier tier
+  if (S.bpm && t > 0) {
+    const period = 60 / S.bpm;
+    const ph = ((((t - S.beatOffset) % period) + period) % period) / period;
+    const beatIdx = Math.floor((t - S.beatOffset) / period);
+    const down = ((beatIdx % 4) + 4) % 4 === 0;
+    const glow = Math.max(0, 1 - ph * 3) * (down ? 1 : 0.55);
+    if (glow > 0.01) {
+      const railCol = MULT_COLORS[mult] || "#23e6ff";
+      cx.save();
+      cx.shadowColor = railCol;
+      cx.shadowBlur = 16 * glow;
+      cx.fillStyle = railCol;
+      cx.globalAlpha = 0.20 + 0.55 * glow;
+      cx.fillRect(x0 - 3, 0, 3, H);
+      cx.fillRect(x0 + laneW * LANES, 0, 3, H);
+      cx.restore();
+      cx.globalAlpha = 1;
+    }
+  }
+  // hit-flash lane glow
+  for (let l = 0; l < LANES; l++) {
+    if (st.hitFlashes[l] > 0) {
+      cx.fillStyle = `rgba(255,255,255,${0.05 * st.hitFlashes[l]})`;
+      cx.fillRect(x0 + l * laneW, 0, laneW, H);
+      st.hitFlashes[l] = Math.max(0, st.hitFlashes[l] - dt * 6);
+    }
+  }
+  // receptors
+  for (let l = 0; l < LANES; l++) {
+    const x = x0 + laneW * (l + 0.5);
+    const press = st.pressed[l];
+    drawArrow(x, receptorY, noteSize, LANE_ANGLES[l],
+      press ? "rgba(255,255,255,0.25)" : null,
+      press ? "#ffffff" : "rgba(255,255,255,0.45)", 3.5,
+      press ? LANE_COLORS[l] : null);
+  }
+  // notes & hold trails
+  const spawnY = -noteSize * 2;
+  const yFor = tp => spawnY + (receptorY - spawnY) * (1 - (tp - t) / speedTime);
+  for (const n of st.notes) {
+    if (n.time - t > speedTime) break; // heads are sorted; the rest are off-screen
+    const isHold = n.dur > 0;
+    const x = x0 + laneW * (n.lane + 0.5);
+    if (isHold && n.holdState !== "done") {
+      const tailT = n.time + n.dur;
+      const yTail = yFor(tailT);
+      // active & broken trails stay pinned at the receptor; missed ones scroll past
+      const yHead = (n.holdState === "active" || n.holdState === "broken") ? receptorY : yFor(n.time);
+      if (yTail < H + 20 && yHead - yTail > 2) {
+        const w = noteSize * 0.8;
+        cx.globalAlpha = n.holdState === "broken" ? 0.15 : n.missed ? 0.2 : n.holdState === "active" ? 0.9 : 0.55;
+        cx.fillStyle = LANE_COLORS[n.lane];
+        cx.beginPath();
+        if (cx.roundRect) cx.roundRect(x - w / 2, yTail, w, yHead - yTail, Math.min(w / 2, (yHead - yTail) / 2));
+        else cx.rect(x - w / 2, yTail, w, yHead - yTail);
+        cx.fill();
+        cx.globalAlpha = 1;
+      }
+    }
+    if (n.judged && n.hit) {
+      // hit heads vanish; an active hold keeps a pulsing arrow pinned to the receptor
+      if (isHold && n.holdState === "active") {
+        const pulse = 1 + 0.08 * Math.sin(t * 18);
+        drawArrow(x, receptorY, noteSize * pulse, LANE_ANGLES[n.lane], "#ffffff", LANE_COLORS[n.lane], 3, LANE_COLORS[n.lane]);
+      }
+      continue;
+    }
+    const y = yFor(n.time);
+    if (y > H + noteSize * 2 && !isHold) continue;
+    cx.globalAlpha = n.missed ? 0.25 : 1;
+    drawArrow(x, y, noteSize, LANE_ANGLES[n.lane],
+      LANE_COLORS[n.lane], "rgba(255,255,255,0.85)", 2, LANE_COLORS[n.lane]);
+    cx.globalAlpha = 1;
+  }
+}
+
+// compact score/combo/multiplier readout above the opponent's runway
+function drawOppHud(geom) {
+  const o = MP.opp;
+  if (!o) return;
+  const midX = geom.x0 + (geom.laneW * LANES) / 2;
+  cx.save();
+  cx.textAlign = "center";
+  cx.textBaseline = "top";
+  cx.font = "700 15px 'Segoe UI', system-ui, sans-serif";
+  cx.fillStyle = "rgba(255,255,255,0.75)";
+  cx.fillText(`${o.name || "OPPONENT"} · ${o.score.toLocaleString()}`, midX, 14);
+  const col = MULT_COLORS[o.mult] || "#8a8fb0";
+  cx.font = "900 22px 'Segoe UI', system-ui, sans-serif";
+  cx.fillStyle = col;
+  cx.shadowColor = col;
+  cx.shadowBlur = 10;
+  cx.fillText("x" + o.mult + (o.combo >= 2 ? " · " + o.combo : ""), midX, 34);
+  cx.restore();
+}
+
 function gameLoop() {
   if (!G.running) return;
   G.raf = requestAnimationFrame(gameLoop);
@@ -1498,87 +2025,12 @@ function gameLoop() {
     cx.fillRect(0, 0, W, H);
   }
 
-  // lane track
-  cx.fillStyle = "rgba(255,255,255,0.03)";
-  cx.fillRect(x0, 0, laneW * LANES, H);
-  for (let l = 0; l <= LANES; l++) {
-    cx.fillStyle = "rgba(255,255,255,0.08)";
-    cx.fillRect(x0 + l * laneW, 0, 1, H);
-  }
-  // beat-flash side rails, tinted by the current multiplier tier
-  if (S.bpm && t > 0) {
-    const period = 60 / S.bpm;
-    const ph = ((((t - S.beatOffset) % period) + period) % period) / period;
-    const beatIdx = Math.floor((t - S.beatOffset) / period);
-    const down = ((beatIdx % 4) + 4) % 4 === 0;
-    const glow = Math.max(0, 1 - ph * 3) * (down ? 1 : 0.55);
-    if (glow > 0.01) {
-      const railCol = MULT_COLORS[G.mult] || "#23e6ff";
-      cx.save();
-      cx.shadowColor = railCol;
-      cx.shadowBlur = 16 * glow;
-      cx.fillStyle = railCol;
-      cx.globalAlpha = 0.20 + 0.55 * glow;
-      cx.fillRect(x0 - 3, 0, 3, H);
-      cx.fillRect(x0 + laneW * LANES, 0, 3, H);
-      cx.restore();
-      cx.globalAlpha = 1;
-    }
-  }
-  // pressed lane glow
-  for (let l = 0; l < LANES; l++) {
-    if (G.hitFlashes[l] > 0) {
-      cx.fillStyle = `rgba(255,255,255,${0.05 * G.hitFlashes[l]})`;
-      cx.fillRect(x0 + l * laneW, 0, laneW, H);
-      G.hitFlashes[l] = Math.max(0, G.hitFlashes[l] - dt * 6);
-    }
-  }
-  // receptors
-  for (let l = 0; l < LANES; l++) {
-    const x = x0 + laneW * (l + 0.5);
-    const press = G.pressed[l];
-    drawArrow(x, receptorY, noteSize, LANE_ANGLES[l],
-      press ? "rgba(255,255,255,0.25)" : null,
-      press ? "#ffffff" : "rgba(255,255,255,0.45)", 3.5,
-      press ? LANE_COLORS[l] : null);
-  }
-  // notes & hold trails
-  const spawnY = -noteSize * 2;
-  const yFor = tp => spawnY + (receptorY - spawnY) * (1 - (tp - t) / speedTime);
-  for (const n of G.notes) {
-    if (n.time - t > speedTime) break; // heads are sorted; the rest are off-screen
-    const isHold = n.dur > 0;
-    const x = x0 + laneW * (n.lane + 0.5);
-    if (isHold && n.holdState !== "done") {
-      const tailT = n.time + n.dur;
-      const yTail = yFor(tailT);
-      // active & broken trails stay pinned at the receptor; missed ones scroll past
-      const yHead = (n.holdState === "active" || n.holdState === "broken") ? receptorY : yFor(n.time);
-      if (yTail < H + 20 && yHead - yTail > 2) {
-        const w = noteSize * 0.8;
-        cx.globalAlpha = n.holdState === "broken" ? 0.15 : n.missed ? 0.2 : n.holdState === "active" ? 0.9 : 0.55;
-        cx.fillStyle = LANE_COLORS[n.lane];
-        cx.beginPath();
-        if (cx.roundRect) cx.roundRect(x - w / 2, yTail, w, yHead - yTail, Math.min(w / 2, (yHead - yTail) / 2));
-        else cx.rect(x - w / 2, yTail, w, yHead - yTail);
-        cx.fill();
-        cx.globalAlpha = 1;
-      }
-    }
-    if (n.judged && n.hit) {
-      // hit heads vanish; an active hold keeps a pulsing arrow pinned to the receptor
-      if (isHold && n.holdState === "active") {
-        const pulse = 1 + 0.08 * Math.sin(t * 18);
-        drawArrow(x, receptorY, noteSize * pulse, LANE_ANGLES[n.lane], "#ffffff", LANE_COLORS[n.lane], 3, LANE_COLORS[n.lane]);
-      }
-      continue;
-    }
-    const y = yFor(n.time);
-    if (y > H + noteSize * 2 && !isHold) continue;
-    cx.globalAlpha = n.missed ? 0.25 : 1;
-    drawArrow(x, y, noteSize, LANE_ANGLES[n.lane],
-      LANE_COLORS[n.lane], "rgba(255,255,255,0.85)", 2, LANE_COLORS[n.lane]);
-    cx.globalAlpha = 1;
+  // my runway (left of center in MP, centered solo) + the opponent's mirror
+  renderRunway({ laneW, x0, receptorY, H }, G, t, dt, G.mult);
+  if (MP.inGame && MP.opp) {
+    const og = oppGeometry();
+    renderRunway(og, MP.opp, t, dt, MP.opp.mult);
+    drawOppHud(og);
   }
   // high-gear embers drifting up the rails at x10+
   if (G.mult >= 10 && t > 0 && G.particles.length < 250) {
@@ -1658,6 +2110,24 @@ function showResults() {
   $("resHint").textContent = Math.abs(avgErr) > 25 && G.errN >= 10
     ? `You hit on average ${Math.abs(Math.round(avgErr))} ms ${avgErr > 0 ? "late" : "early"} — try setting Audio offset to ${avgErr > 0 ? "+" : "-"}${Math.min(200, Math.abs(Math.round(avgErr)))} ms on the difficulty screen.`
     : "";
+  if (MP.active) {
+    MP.myStats = { name: MP.myName, diff: S.difficulty, score: G.score, acc: +acc.toFixed(2), maxCombo: G.maxCombo, miss: c.miss };
+    mpSend({ type: "finish", stats: MP.myStats });
+    MP.inGame = false;
+    $("btnRetry").style.display = "none";
+    $("btnChangeDiff").style.display = "none";
+    $("btnNewSong").style.display = "none";
+    $("btnMpLobby").style.display = "";
+    $("resOppPanel").style.display = "";
+    mpFillOppResults();
+  } else {
+    $("btnRetry").style.display = "";
+    $("btnChangeDiff").style.display = "";
+    $("btnNewSong").style.display = "";
+    $("btnMpLobby").style.display = "none";
+    $("resOppPanel").style.display = "none";
+    $("resWinner").style.display = "none";
+  }
   show("scr-results");
 }
 
@@ -1683,14 +2153,60 @@ window.addEventListener("DOMContentLoaded", () => {
     const f = e.dataTransfer && e.dataTransfer.files[0];
     if (f) loadFile(f);
   });
-  $("btnDemo").addEventListener("click", () => {
+  const startDemoSong = () => {
     const ctx = ensureCtx();
+    S.isDemo = true;
+    S.songFile = null;
     loading(true, "Generating demo track…");
     setTimeout(() => setSong(makeDemoTrack(ctx), "Demo Groove (120 BPM)"), 30);
+  };
+  $("btnDemo").addEventListener("click", startDemoSong);
+
+  /* multiplayer entry + lobby */
+  try { MP.myName = localStorage.getItem("bd-name") || "Player"; } catch (e) { /* private mode */ }
+  $("btnMp").addEventListener("click", () => {
+    if (location.protocol === "file:") {
+      alert("Multiplayer needs the server.\n\nIn the game folder run:  npm install && npm start\nthen open the http:// address it prints (share your Tailscale or LAN IP with your opponent).");
+      return;
+    }
+    ensureCtx();
+    mpEnterLobby();
+  });
+  $("mpBack").addEventListener("click", mpLeave);
+  $("mpSetName").addEventListener("click", () => {
+    const v = $("mpName").value.trim().slice(0, 24);
+    if (!v) return;
+    MP.myName = v;
+    try { localStorage.setItem("bd-name", v); } catch (e) { /* ignore */ }
+    mpSend({ type: "hello", name: v });
+    mpRenderRoom();
+  });
+  $("mpUpload").addEventListener("click", () => $("fileInput").click());
+  $("mpDemo").addEventListener("click", startDemoSong);
+  $("mpToDiff").addEventListener("click", () => { mpFillDiffLabels(); mpShowDiff(); });
+  $("btnMpLobby").addEventListener("click", () => { MP.inGame = false; mpShowLobby(); });
+  $("btnMpKeepPlaying").addEventListener("click", () => $("mpQuitOverlay").classList.remove("active"));
+  $("btnMpForfeit").addEventListener("click", () => {
+    $("mpQuitOverlay").classList.remove("active");
+    mpSend({ type: "quit" });
+    MP.inGame = false;
+    stopGame();
+    mpShowLobby();
+  });
+  $("btnMpReady").addEventListener("click", () => {
+    if (!MP.myDiff || MP.myReady) return;
+    ensureCtx(); // user gesture: make sure audio can start when the match begins
+    MP.myReady = true;
+    $("btnMpReady").textContent = "WAITING…";
+    mpSend({ type: "ready", diff: MP.myDiff });
+    mpRenderDiffUi();
   });
 
   /* sync screen */
-  $("syncBack").addEventListener("click", () => { stopSyncPlayback(); show("scr-home"); });
+  $("syncBack").addEventListener("click", () => {
+    stopSyncPlayback();
+    if (MP.active) { MP.owner = false; mpShowLobby(); } else show("scr-home");
+  });
   $("btnPlay").addEventListener("click", () => {
     if (!S.buffer) return;
     if (sync.playing) { sync.pos = syncSongPos(); stopSyncPlayback(); }
@@ -1745,7 +2261,42 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   $("btnToDiff").addEventListener("click", () => {
     stopSyncPlayback();
-    // show note counts per difficulty
+    if (MP.active) {
+      // song owner: generate all charts, share audio + charts, then pick difficulty
+      loading(true, "Sharing song…");
+      setTimeout(async () => {
+        const charts = {};
+        for (const key of Object.keys(DIFFS)) charts[key] = generateNotes(key);
+        MP.meta = { demo: !!S.isDemo, name: S.songName, bpm: S.bpm, beatOffset: S.beatOffset, charts };
+        MP.owner = true;
+        MP.myDiff = null; MP.myReady = false;
+        try {
+          if (!S.isDemo && S.songFile) {
+            const resp = await fetch("/song", {
+              method: "PUT",
+              body: S.songFile,
+              headers: {
+                "Content-Type": S.songFile.type || "application/octet-stream",
+                "X-Song-Name": encodeURIComponent(S.songName),
+              },
+            });
+            if (!resp.ok) throw new Error("upload failed (" + resp.status + ")");
+          }
+          mpSend({ type: "songMeta", meta: MP.meta });
+          MP.songReady = true;
+          mpFillDiffLabels();
+          loading(false);
+          mpShowDiff();
+        } catch (err) {
+          loading(false);
+          alert("Couldn't share the song: " + err.message);
+          mpShowLobby();
+        }
+        mpRenderSong();
+      }, 30);
+      return;
+    }
+    // solo: show note counts per difficulty
     loading(true, "Preparing difficulties…");
     setTimeout(() => {
       for (const key of Object.keys(DIFFS)) {
@@ -1753,15 +2304,41 @@ window.addEventListener("DOMContentLoaded", () => {
         const holds = g.filter(n => n.dur > 0).length;
         $("cnt-" + key).textContent = `${g.length} notes · ${holds} holds`;
       }
+      $("diffMpBar").style.display = "none";
+      document.querySelectorAll(".diffcard").forEach(c => {
+        c.classList.remove("selected");
+        const b = c.querySelector(".oppbadge");
+        if (b) b.style.display = "none";
+      });
       loading(false);
       show("scr-diff");
     }, 30);
   });
 
   /* difficulty screen */
-  $("diffBack").addEventListener("click", () => { show("scr-sync"); drawWave(); });
+  $("diffBack").addEventListener("click", () => {
+    if (MP.active) {
+      if (MP.myReady) { MP.myReady = false; mpSend({ type: "unready" }); }
+      mpShowLobby();
+      return;
+    }
+    show("scr-sync");
+    drawWave();
+  });
   document.querySelectorAll(".diffcard").forEach(card =>
-    card.addEventListener("click", () => { S.difficulty = card.dataset.diff; startGame(); }));
+    card.addEventListener("click", () => {
+      if (MP.active) {
+        MP.myDiff = card.dataset.diff;
+        MP.myReady = false;
+        mpSend({ type: "pickDiff", diff: MP.myDiff });
+        $("btnMpReady").disabled = false;
+        $("btnMpReady").textContent = "READY";
+        mpRenderDiffUi();
+        return;
+      }
+      S.difficulty = card.dataset.diff;
+      startGame();
+    }));
   $("setSpeed").addEventListener("input", e => { S.settings.speed = +e.target.value; refreshSettingLabels(); saveSettings(); });
   $("setVolume").addEventListener("input", e => { S.settings.volume = +e.target.value; refreshSettingLabels(); applyVolume(); saveSettings(); });
   $("setOffset").addEventListener("input", e => { S.settings.offsetMs = +e.target.value; refreshSettingLabels(); saveSettings(); });
@@ -1777,9 +2354,11 @@ window.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("resize", () => { if (canvas) resizeCanvas(); });
   window.addEventListener("blur", () => {
     G.pressed = [false, false, false, false]; // keyups are lost while unfocused
-    if (G.running && !G.over) pauseGame();
+    if (G.running && !G.over && !MP.inGame) pauseGame(); // pausing would desync a match
   });
-  document.addEventListener("visibilitychange", () => { if (document.hidden && G.running && !G.over) pauseGame(); });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && G.running && !G.over && !MP.inGame) pauseGame();
+  });
 
   /* keyboard */
   document.addEventListener("keydown", e => {
@@ -1793,6 +2372,7 @@ window.addEventListener("DOMContentLoaded", () => {
       return;
     }
     if (e.code === "Escape" && onGame && !e.repeat) {
+      if (MP.inGame) { $("mpQuitOverlay").classList.toggle("active"); return; }
       if (G.paused) resumeGame(); else pauseGame();
     }
   });

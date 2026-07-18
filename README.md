@@ -2,7 +2,18 @@
 
 A browser rhythm game in the spirit of DDR / Tap Tap Revenge / Guitar Hero — load **your own MP3 or FLAC**, set the tempo with the built-in **tap-to-the-beat tool** (or one-click auto-detect), and hit the arrows in time with the music.
 
-No build step, no dependencies, no server required: the whole game is a single `index.html`. Just open it in a modern browser (Chrome, Edge, or Firefox).
+No build step required for solo play: the whole game is a single `index.html`. Just open it in a modern browser (Chrome, Edge, or Firefox).
+
+## Multiplayer (LAN / Tailscale)
+
+Two players, side by side on the same track — each with their own difficulty.
+
+```
+npm install
+npm start
+```
+
+One player hosts; the server prints its addresses. Both players open the host's LAN or **Tailscale** IP (e.g. `http://100.x.y.z:8123`) and click **Multiplayer**. Either player can pick the song — upload an MP3/FLAC (it's relayed to the other player automatically, along with identical pre-generated charts) or use the demo track. The song owner sets the tempo as usual; both players pick their own difficulty and hit READY. Starts are clock-synchronized to a few milliseconds; your opponent's runway renders live beside yours with their hits, combo, and multiplier. Esc during a match offers a forfeit (no pausing — it would desync). Not in v1: reconnect mid-song, more than 2 players, spectators.
 
 ## How to play
 
