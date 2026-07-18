@@ -148,9 +148,6 @@
   .hud { position: absolute; pointer-events: none; }
   #hudScore { top: 18px; left: 24px; font-size: 30px; font-weight: 800; font-variant-numeric: tabular-nums; text-shadow: 0 0 12px rgba(35,230,255,0.5); }
   #hudAcc { top: 58px; left: 25px; font-size: 15px; color: var(--dim); font-variant-numeric: tabular-nums; }
-  #hudMult { top: 84px; left: 24px; font-size: 27px; font-weight: 900; color: var(--dim); font-variant-numeric: tabular-nums; text-shadow: 0 0 16px rgba(255,176,46,0.35); }
-  #hudMult.pop { animation: multPop .22s ease-out; }
-  @keyframes multPop { 0% { transform: scale(1.7); } 100% { transform: scale(1); } }
   #hudDiff { top: 18px; right: 24px; font-size: 14px; color: var(--dim); text-align: right; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #hudCombo {
     top: 24%; left: 50%; transform: translateX(-50%);
@@ -320,7 +317,6 @@
   <div class="hud" id="hudProgress"></div>
   <div class="hud" id="hudScore">0</div>
   <div class="hud" id="hudAcc">100.0%</div>
-  <div class="hud" id="hudMult">x1</div>
   <div class="hud" id="hudDiff"></div>
   <div class="hud" id="hudCombo"></div>
   <div class="hud" id="hudJudge"></div>
@@ -398,6 +394,7 @@ const MULT_TIERS = [
   { combo: 10,  mult: 2 },
 ];
 const HOLD_TICK_SCORE = 40; // awarded (x multiplier) for holding a note to its tail
+const MULT_COLORS = { 1: "#8a8fb0", 2: "#57ff7a", 3: "#23e6ff", 4: "#ffb02e", 5: "#ff3da0", 10: "#b26bff", 20: "#ffd75e" };
 
 const DIFFS = {
   easy:   { name: "EASY",   subPerBeat: 1, minGap: 0.42,  nps: 1.2, doubles: 0,    holdFrac: 0.18 },
@@ -1100,7 +1097,7 @@ const G = {
   notes: [], cursors: [0, 0, 0, 0],
   startCtx: 0, leadIn: 2.2, songTime: -99,
   source: null, running: false, paused: false, over: false,
-  score: 0, combo: 0, maxCombo: 0, mult: 1, maxMult: 1,
+  score: 0, combo: 0, maxCombo: 0, mult: 1, maxMult: 1, multFlash: 0,
   counts: { perfect: 0, great: 0, good: 0, miss: 0 },
   holdsOk: 0, holdsTotal: 0, activeHolds: [null, null, null, null],
   errSum: 0, errN: 0,
@@ -1141,11 +1138,10 @@ function startGame() {
     src.start(G.startCtx + G.leadIn);
     G.running = true;
 
+    G.multFlash = 0;
     $("hudScore").textContent = "0";
     $("hudAcc").textContent = "100.0%";
     $("hudCombo").textContent = "";
-    $("hudMult").textContent = "x1";
-    $("hudMult").style.color = "var(--dim)";
     $("hudDiff").textContent = `${DIFFS[S.difficulty].name} · ${S.songName}`;
     $("pauseOverlay").classList.remove("active");
     loading(false);
@@ -1210,19 +1206,44 @@ function refreshComboHud() {
   const acc = total ? (G.counts.perfect * 1 + G.counts.great * 0.65 + G.counts.good * 0.30) / total * 100 : 100;
   $("hudAcc").textContent = acc.toFixed(1) + "%";
 }
+// progress from the current tier's combo floor toward the next threshold
+function meterProgress(combo) {
+  const ths = MULT_TIERS.map(x => x.combo).sort((a, b) => a - b);
+  let curFloor = 0, nextThr = null;
+  for (const th of ths) {
+    if (combo >= th) curFloor = th;
+    else { nextThr = th; break; }
+  }
+  const segs = 10;
+  const lit = nextThr === null ? segs : Math.floor((combo - curFloor) / (nextThr - curFloor) * segs + 1e-6);
+  return { curFloor, nextThr, lit, segs };
+}
 function updateMultiplier() {
   let m = 1;
   for (const tier of MULT_TIERS) if (G.combo >= tier.combo) { m = tier.mult; break; }
   if (m !== G.mult) {
+    const up = m > G.mult;
     G.mult = m;
-    const el = $("hudMult");
-    el.textContent = "x" + m;
-    el.style.color = m >= 10 ? "var(--lane1)" : m >= 4 ? "var(--lane3)" : m >= 2 ? "var(--lane2)" : "var(--dim)";
-    el.classList.remove("pop");
-    void el.offsetWidth;
-    el.classList.add("pop");
+    if (up) {
+      G.multFlash = 1;
+      if (G.running) spawnTierUpFx();
+    }
   }
   if (m > G.maxMult) G.maxMult = m;
+}
+function spawnTierUpFx() {
+  const { laneW, x0, receptorY } = laneGeometry();
+  const col = MULT_COLORS[G.mult] || "#ffffff";
+  for (let l = 0; l < LANES; l++) {
+    const x = x0 + laneW * (l + 0.5);
+    G.particles.push({ x, y: receptorY, ring: true, life: 0.5, t: 0, col });
+    for (let i = 0; i < 6; i++) {
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.2; // spray up the runway
+      const sp = 260 + Math.random() * 320;
+      G.particles.push({ x, y: receptorY, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0.7, t: 0, col });
+    }
+  }
+  G.particles.push({ x: Math.max(40, x0 - 64), y: receptorY - 10, ring: true, life: 0.5, t: 0, col });
 }
 function applyJudgment(kind, note, err) {
   note.judged = true;
@@ -1349,6 +1370,70 @@ function spawnHitEffect(lane, kind) {
   G.particles.push({ x, y: receptorY, ring: true, life: 0.32, t: 0, col: LANE_COLORS[lane] });
 }
 
+// vertical GH-style combo meter with the big multiplier at its base
+function drawMeter(t, laneW, x0, receptorY, H) {
+  const mx = Math.max(40, x0 - 64);
+  const mw = 26;
+  const mh = Math.min(300, H * 0.38);
+  const my1 = receptorY - 8;       // bottom of the segments
+  const my0 = my1 - mh;            // top
+  const col = MULT_COLORS[G.mult] || "#8a8fb0";
+  const { nextThr, lit, segs } = meterProgress(G.combo);
+  const maxed = nextThr === null;
+
+  cx.save();
+  // frame
+  cx.fillStyle = "rgba(255,255,255,0.05)";
+  cx.beginPath();
+  if (cx.roundRect) cx.roundRect(mx - mw / 2 - 4, my0 - 4, mw + 8, mh + 8, 8);
+  else cx.rect(mx - mw / 2 - 4, my0 - 4, mw + 8, mh + 8);
+  cx.fill();
+  cx.strokeStyle = "rgba(255,255,255,0.15)";
+  cx.lineWidth = 1;
+  cx.stroke();
+
+  // segments, bottom-up
+  const segH = (mh - (segs - 1) * 4) / segs;
+  for (let i = 0; i < segs; i++) {
+    const y = my1 - segH - i * (segH + 4);
+    const on = maxed || i < lit;
+    cx.globalAlpha = maxed
+      ? 0.75 + 0.25 * Math.sin(t * 10 + i * 0.7)  // x20: the whole bar burns
+      : on ? 0.55 + 0.45 * ((i + 1) / segs) : 0.10;
+    cx.fillStyle = on ? col : "#ffffff";
+    if (on) { cx.shadowColor = col; cx.shadowBlur = (!maxed && i === lit - 1) ? 14 : 8; }
+    cx.beginPath();
+    if (cx.roundRect) cx.roundRect(mx - mw / 2, y, mw, segH, 4);
+    else cx.rect(mx - mw / 2, y, mw, segH);
+    cx.fill();
+    cx.shadowBlur = 0;
+  }
+  cx.globalAlpha = 1;
+
+  // tier-up flash over the whole bar
+  if (G.multFlash > 0) {
+    cx.globalAlpha = G.multFlash * 0.5;
+    cx.fillStyle = "#ffffff";
+    cx.beginPath();
+    if (cx.roundRect) cx.roundRect(mx - mw / 2 - 4, my0 - 4, mw + 8, mh + 8, 8);
+    else cx.rect(mx - mw / 2 - 4, my0 - 4, mw + 8, mh + 8);
+    cx.fill();
+    cx.globalAlpha = 1;
+  }
+
+  // big multiplier
+  const scale = 1 + G.multFlash * 0.5;
+  const shimmer = G.mult >= 10 ? 0.5 + 0.5 * Math.sin(t * 8) : 0;
+  cx.font = `900 ${Math.round(46 * scale)}px "Segoe UI", system-ui, sans-serif`;
+  cx.textAlign = "center";
+  cx.textBaseline = "top";
+  cx.shadowColor = col;
+  cx.shadowBlur = 18 + shimmer * 22;
+  cx.fillStyle = col;
+  cx.fillText("x" + G.mult, mx, my1 + 14);
+  cx.restore();
+}
+
 function gameLoop() {
   if (!G.running) return;
   G.raf = requestAnimationFrame(gameLoop);
@@ -1420,6 +1505,26 @@ function gameLoop() {
     cx.fillStyle = "rgba(255,255,255,0.08)";
     cx.fillRect(x0 + l * laneW, 0, 1, H);
   }
+  // beat-flash side rails, tinted by the current multiplier tier
+  if (S.bpm && t > 0) {
+    const period = 60 / S.bpm;
+    const ph = ((((t - S.beatOffset) % period) + period) % period) / period;
+    const beatIdx = Math.floor((t - S.beatOffset) / period);
+    const down = ((beatIdx % 4) + 4) % 4 === 0;
+    const glow = Math.max(0, 1 - ph * 3) * (down ? 1 : 0.55);
+    if (glow > 0.01) {
+      const railCol = MULT_COLORS[G.mult] || "#23e6ff";
+      cx.save();
+      cx.shadowColor = railCol;
+      cx.shadowBlur = 16 * glow;
+      cx.fillStyle = railCol;
+      cx.globalAlpha = 0.20 + 0.55 * glow;
+      cx.fillRect(x0 - 3, 0, 3, H);
+      cx.fillRect(x0 + laneW * LANES, 0, 3, H);
+      cx.restore();
+      cx.globalAlpha = 1;
+    }
+  }
   // pressed lane glow
   for (let l = 0; l < LANES; l++) {
     if (G.hitFlashes[l] > 0) {
@@ -1475,7 +1580,20 @@ function gameLoop() {
       LANE_COLORS[n.lane], "rgba(255,255,255,0.85)", 2, LANE_COLORS[n.lane]);
     cx.globalAlpha = 1;
   }
-  // particles
+  // high-gear embers drifting up the rails at x10+
+  if (G.mult >= 10 && t > 0 && G.particles.length < 250) {
+    const n = G.mult >= 20 ? 2 : 1;
+    for (let i = 0; i < n; i++) {
+      const side = Math.random() < 0.5 ? x0 - 4 : x0 + laneW * LANES + 4;
+      G.particles.push({
+        x: side + (Math.random() - 0.5) * 12, y: H + 6,
+        vx: (Math.random() - 0.5) * 30, vy: -(90 + Math.random() * 160),
+        life: 1.4, t: 0, col: G.mult >= 20 ? "#ffd75e" : "#b26bff", ember: true,
+      });
+    }
+  }
+  // particles (hard cap keeps frame time flat)
+  if (G.particles.length > 250) G.particles.splice(0, G.particles.length - 250);
   for (let i = G.particles.length - 1; i >= 0; i--) {
     const p = G.particles[i];
     p.t += dt;
@@ -1489,13 +1607,18 @@ function gameLoop() {
       cx.lineWidth = 3;
       cx.stroke();
     } else {
-      p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 500 * dt;
-      cx.globalAlpha = k;
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      if (!p.ember) p.vy += 500 * dt;
+      cx.globalAlpha = p.ember ? k * (0.45 + 0.55 * Math.random()) : k; // embers flicker
       cx.fillStyle = p.col;
       cx.fillRect(p.x - 2, p.y - 2, 4, 4);
     }
     cx.globalAlpha = 1;
   }
+
+  // GH-style combo meter + big multiplier
+  G.multFlash = Math.max(0, G.multFlash - dt * 2.5);
+  drawMeter(t, laneW, x0, receptorY, H);
 
   // countdown + progress
   const cd = $("hudCountdown");
