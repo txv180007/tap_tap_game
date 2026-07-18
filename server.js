@@ -37,9 +37,24 @@ function maybeStart() {
   }
 }
 
+function networkAddresses() {
+  const addrs = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const n of list || []) {
+      if (n.family === "IPv4" && !n.internal) addrs.push(n.address);
+    }
+  }
+  return addrs;
+}
+
 /* ---------------- HTTP: static files + song relay ---------------- */
 const server = http.createServer((req, res) => {
   const url = req.url.split("?")[0];
+  if (req.method === "GET" && url === "/info") {
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ port: PORT, addrs: networkAddresses() }));
+    return;
+  }
   if (req.method === "GET" && (url === "/" || url === "/index.html")) {
     fs.readFile(path.join(__dirname, "index.html"), (err, data) => {
       if (err) { res.writeHead(500); res.end("cannot read index.html"); return; }
@@ -141,15 +156,8 @@ wss.on("connection", ws => {
 });
 
 server.listen(PORT, () => {
-  const nets = os.networkInterfaces();
-  const addrs = [];
-  for (const list of Object.values(nets)) {
-    for (const n of list || []) {
-      if (n.family === "IPv4" && !n.internal) addrs.push(n.address);
-    }
-  }
   console.log(`BEAT DANCE server on port ${PORT}`);
   console.log(`  local:   http://localhost:${PORT}`);
-  for (const a of addrs) console.log(`  network: http://${a}:${PORT}`);
+  for (const a of networkAddresses()) console.log(`  network: http://${a}:${PORT}`);
   console.log("Share a network URL (LAN or Tailscale IP) with your opponent.");
 });

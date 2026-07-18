@@ -13,7 +13,7 @@ npm install
 npm start
 ```
 
-One player hosts; the server prints its addresses. Both players open the host's LAN or **Tailscale** IP (e.g. `http://100.x.y.z:8123`) and click **Multiplayer**. Either player can pick the song — upload an MP3/FLAC (it's relayed to the other player automatically, along with identical pre-generated charts) or use the demo track. The song owner sets the tempo as usual; both players pick their own difficulty and hit READY. Starts are clock-synchronized to a few milliseconds; your opponent's runway renders live beside yours with their hits, combo, and multiplier. Esc during a match offers a forfeit (no pausing — it would desync). Not in v1: reconnect mid-song, more than 2 players, spectators.
+One player hosts; the server prints its addresses — and the in-game lobby shows an **Invite your opponent** panel with your Tailscale/LAN links and one-click copy, so you never have to read the terminal. (Opening `index.html` directly? Click **Multiplayer → Host a game** for guided setup, including a downloadable `start-server.bat` for Windows.) Both players open the host's link (e.g. `http://100.x.y.z:8123`) and click **Multiplayer**. Either player can pick the song — upload an MP3/FLAC (it's relayed to the other player automatically, along with identical pre-generated charts) or use the demo track. The song owner sets the tempo as usual; both players pick their own difficulty and hit READY. Starts are clock-synchronized to a few milliseconds; your opponent's runway renders live beside yours with their hits, combo, and multiplier. Esc during a match offers a forfeit (no pausing — it would desync). Not in v1: reconnect mid-song, more than 2 players, spectators.
 
 ## How to play
 

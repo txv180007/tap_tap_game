@@ -196,6 +196,18 @@
   .backlink { position: absolute; top: 20px; left: 20px; }
 
   /* multiplayer */
+  .linkrow {
+    justify-content: space-between; width: 100%;
+    background: rgba(0,0,0,0.28); border: 1px solid var(--panel-br);
+    border-radius: 9px; padding: 7px 12px; flex-wrap: nowrap;
+  }
+  .linkrow code { font-family: Consolas, monospace; font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .linktag {
+    font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 6px; flex-shrink: 0;
+    background: rgba(255,255,255,0.12); color: var(--dim);
+  }
+  .linktag.ts { background: rgba(87,255,122,0.18); color: var(--lane2); }
   .diffcard.selected { border-color: var(--accent); box-shadow: 0 0 18px rgba(35,230,255,0.35); }
   .diffcard { position: relative; }
   .oppbadge {
@@ -254,6 +266,34 @@
   </div>
 </div>
 
+<!-- ==================== HOST A GAME ==================== -->
+<div class="screen" id="scr-host">
+  <button class="btn small backlink" id="hostBack">&larr; Back</button>
+  <h2 style="font-size:30px; font-weight:800;">HOST A GAME</h2>
+  <div class="panel col" style="max-width: min(600px, 92vw); gap: 14px; align-items: stretch;">
+    <div class="hint" style="text-align:left;">
+      Multiplayer runs on a tiny server that's already in this game folder. One player hosts it;
+      the other just opens the host's link in a browser &mdash; over your LAN or Tailscale.
+      Hosting needs <b>Node.js</b> (<span style="color:var(--accent)">nodejs.org</span>).
+    </div>
+    <div class="label">Windows &mdash; one-click</div>
+    <div class="row" style="justify-content:flex-start;">
+      <button class="btn" id="btnDownloadBat">&#11015; Download start-server.bat</button>
+      <span class="statline">save it <b>next to index.html</b>, then double-click it</span>
+    </div>
+    <div class="label">Any OS &mdash; terminal</div>
+    <div class="row linkrow">
+      <code>npm install &amp;&amp; npm start</code>
+      <button class="btn small" id="btnCopyHostCmd">Copy</button>
+    </div>
+    <div class="hint" style="text-align:left;">
+      The server prints your addresses. Open one yourself, click <b>Multiplayer</b>, and use the
+      <b>Invite</b> panel to copy the link for your opponent (the 100.x one is Tailscale).
+    </div>
+    <div class="statline" id="hostCopyStatus"></div>
+  </div>
+</div>
+
 <!-- ==================== MULTIPLAYER LOBBY ==================== -->
 <div class="screen" id="scr-mp">
   <button class="btn small backlink" id="mpBack">&larr; Leave</button>
@@ -264,6 +304,14 @@
     <div class="row">
       <input id="mpName" class="bpmedit" style="font-size:16px; width:170px;" maxlength="24" placeholder="your name">
       <button class="btn small" id="mpSetName">Set name</button>
+    </div>
+  </div>
+  <div class="panel col" style="min-width: min(460px, 90vw);" id="mpSharePanel">
+    <div class="label">Invite your opponent</div>
+    <div id="mpLinks" class="col" style="gap:6px; width:100%; align-items: stretch;"></div>
+    <div class="row">
+      <button class="btn small" id="mpCopyInvite">&#128203; Copy invite link</button>
+      <span class="statline" id="mpCopyStatus">they open it and click Multiplayer</span>
     </div>
   </div>
   <div class="panel col" style="min-width: min(460px, 90vw);">
@@ -1207,10 +1255,107 @@ const MP = {
   oppDiff: null, oppReady: false,
   opp: null,           // in-game opponent mirror
   oppFinished: null, myStats: null, oppLeft: false,
+  shareLinks: null,    // [{url, kind}] from the server's /info
 };
 
 function mpSend(obj) {
   if (MP.ws && MP.ws.readyState === WebSocket.OPEN) MP.ws.send(JSON.stringify(obj));
+}
+
+/* ---- host & share tools ---- */
+function copyText(text, statusEl) {
+  const report = ok => {
+    if (!statusEl) return;
+    statusEl.textContent = ok ? "copied!" : "";
+    setTimeout(() => { statusEl.textContent = ""; }, 2500);
+  };
+  const execFallback = () => {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    ta.remove();
+    return ok;
+  };
+  const tryFallbacks = () => {
+    if (execFallback()) { report(true); return; }
+    // last resort: a prompt with the text pre-selected (Ctrl+C, Enter)
+    try { window.prompt("Copy this (Ctrl+C, Enter):", text); report(false); }
+    catch (e) { report(false); }
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => report(true), tryFallbacks);
+  } else {
+    tryFallbacks(); // plain-http LAN pages have no async clipboard API
+  }
+}
+
+function classifyIp(ip) {
+  const p = ip.split(".").map(Number);
+  if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return "Tailscale";
+  if (p[0] === 192 && p[1] === 168) return "LAN";
+  if (p[0] === 10) return "LAN";
+  if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return "LAN";
+  return "Network";
+}
+
+// ask the server which addresses it listens on and render the invite panel
+function mpLoadShareInfo() {
+  const KIND_RANK = { Tailscale: 0, LAN: 1, Network: 2 };
+  fetch("/info")
+    .then(r => { if (!r.ok) throw new Error("no /info"); return r.json(); })
+    .then(info => {
+      const links = info.addrs
+        .map(ip => ({ url: `http://${ip}:${info.port}`, kind: classifyIp(ip) }))
+        .sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind]);
+      MP.shareLinks = links;
+      const box = $("mpLinks");
+      box.innerHTML = "";
+      if (!links.length) { $("mpSharePanel").style.display = "none"; return; }
+      $("mpSharePanel").style.display = "";
+      for (const l of links) {
+        const row = document.createElement("div");
+        row.className = "row linkrow";
+        const tag = document.createElement("span");
+        tag.className = "linktag" + (l.kind === "Tailscale" ? " ts" : "");
+        tag.textContent = l.kind;
+        const code = document.createElement("code");
+        code.textContent = l.url;
+        const btn = document.createElement("button");
+        btn.className = "btn small";
+        btn.textContent = "Copy";
+        btn.addEventListener("click", () => copyText(l.url, $("mpCopyStatus")));
+        row.append(tag, code, btn);
+        box.appendChild(row);
+      }
+    })
+    .catch(() => { $("mpSharePanel").style.display = "none"; });
+}
+
+const HOST_BAT = [
+  "@echo off",
+  "cd /d \"%~dp0\"",
+  "where node >nul 2>nul || (echo Node.js is required - install it from https://nodejs.org && pause && exit /b 1)",
+  "if not exist node_modules\\ws (echo Installing dependencies... && call npm install --no-fund --no-audit)",
+  "echo Starting BEAT DANCE server...",
+  "node server.js",
+  "pause",
+  "",
+].join("\r\n");
+
+function downloadHostBat() {
+  const blob = new Blob([HOST_BAT], { type: "application/octet-stream" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "start-server.bat";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
 function mpConnect() {
@@ -1339,6 +1484,7 @@ function mpEnterLobby() {
   $("mpName").value = MP.myName;
   mpRenderRoom();
   mpRenderSong();
+  mpLoadShareInfo();
   show("scr-mp");
   if (!MP.ws || MP.ws.readyState === WebSocket.CLOSING || MP.ws.readyState === WebSocket.CLOSED) mpConnect();
 }
@@ -2165,12 +2311,15 @@ window.addEventListener("DOMContentLoaded", () => {
   /* multiplayer entry + lobby */
   try { MP.myName = localStorage.getItem("bd-name") || "Player"; } catch (e) { /* private mode */ }
   $("btnMp").addEventListener("click", () => {
-    if (location.protocol === "file:") {
-      alert("Multiplayer needs the server.\n\nIn the game folder run:  npm install && npm start\nthen open the http:// address it prints (share your Tailscale or LAN IP with your opponent).");
-      return;
-    }
+    if (location.protocol === "file:") { show("scr-host"); return; }
     ensureCtx();
     mpEnterLobby();
+  });
+  $("hostBack").addEventListener("click", () => show("scr-home"));
+  $("btnDownloadBat").addEventListener("click", downloadHostBat);
+  $("btnCopyHostCmd").addEventListener("click", () => copyText("npm install && npm start", $("hostCopyStatus")));
+  $("mpCopyInvite").addEventListener("click", () => {
+    if (MP.shareLinks && MP.shareLinks.length) copyText(MP.shareLinks[0].url, $("mpCopyStatus"));
   });
   $("mpBack").addEventListener("click", mpLeave);
   $("mpSetName").addEventListener("click", () => {
