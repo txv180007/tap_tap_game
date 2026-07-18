@@ -466,11 +466,17 @@
   <div class="panel" id="resOppPanel" style="display:none;">
     <div style="font-weight:800; margin-bottom:10px;" id="resOppName">Opponent</div>
     <div class="resgrid">
+      <span>Grade</span><span class="v" id="resOppGrade">&mdash;</span>
       <span>Difficulty</span><span class="v" id="resOppDiff">&mdash;</span>
-      <span>Score</span><span class="v" id="resOppScore">&mdash;</span>
-      <span>Accuracy</span><span class="v" id="resOppAcc">&mdash;</span>
-      <span>Max combo</span><span class="v" id="resOppCombo">&mdash;</span>
+      <span style="color:var(--accent)">Perfect</span><span class="v" id="resOppPerfect">&mdash;</span>
+      <span style="color:var(--lane2)">Great</span><span class="v" id="resOppGreat">&mdash;</span>
+      <span style="color:var(--lane3)">Good</span><span class="v" id="resOppGood">&mdash;</span>
       <span style="color:var(--lane1)">Miss</span><span class="v" id="resOppMiss">&mdash;</span>
+      <span>Max combo</span><span class="v" id="resOppCombo">&mdash;</span>
+      <span>Max multiplier</span><span class="v" id="resOppMult">&mdash;</span>
+      <span>Holds</span><span class="v" id="resOppHolds">&mdash;</span>
+      <span>Accuracy</span><span class="v" id="resOppAcc">&mdash;</span>
+      <span>Score</span><span class="v" id="resOppScore">&mdash;</span>
     </div>
   </div>
   </div>
@@ -1583,7 +1589,7 @@ function mpStartMatch(serverT) {
     })),
     pressed: [false, false, false, false],
     hitFlashes: [0, 0, 0, 0],
-    combo: 0, score: 0, mult: 1, maxCombo: 0, missCount: 0,
+    combo: 0, score: 0, mult: 1, maxCombo: 0, missCount: 0, multFlash: 0,
     diff: MP.oppDiff, name: MP.oppName,
   };
   MP.myReady = false; MP.oppReady = false;
@@ -1610,6 +1616,7 @@ function mpApplyOppJudge(msg) {
       }
     }
   }
+  if (msg.mult > o.mult) o.multFlash = 1; // their meter flashes on tier-up too
   o.combo = msg.combo; o.score = msg.score; o.mult = msg.mult;
   if (o.combo > o.maxCombo) o.maxCombo = o.combo;
 }
@@ -1619,27 +1626,33 @@ function mpApplyOppHold(msg) {
   if (!o) return;
   const n = o.notes[msg.idx];
   if (n) n.holdState = msg.ok ? "done" : "broken";
+  if (msg.mult > o.mult) o.multFlash = 1;
   o.combo = msg.combo; o.score = msg.score; o.mult = msg.mult;
   if (o.combo > o.maxCombo) o.maxCombo = o.combo;
 }
 
 function mpFillOppResults() {
   const s = MP.oppFinished;
+  const IDS = ["resOppGrade", "resOppDiff", "resOppPerfect", "resOppGreat", "resOppGood",
+               "resOppMiss", "resOppCombo", "resOppMult", "resOppHolds", "resOppAcc"];
   $("resOppName").textContent = (s && s.name) || MP.oppName || "Opponent";
   if (!s) {
-    $("resOppDiff").textContent = "…";
+    for (const id of IDS) $(id).textContent = "—";
     $("resOppScore").textContent = MP.oppLeft ? "left the match" : "still playing…";
-    $("resOppAcc").textContent = "—";
-    $("resOppCombo").textContent = "—";
-    $("resOppMiss").textContent = "—";
     $("resWinner").style.display = "none";
     return;
   }
+  $("resOppGrade").textContent = s.grade || "—";
   $("resOppDiff").textContent = DIFFS[s.diff] ? DIFFS[s.diff].name : String(s.diff || "—");
-  $("resOppScore").textContent = (+s.score).toLocaleString();
-  $("resOppAcc").textContent = s.acc + "%";
-  $("resOppCombo").textContent = s.maxCombo;
+  $("resOppPerfect").textContent = s.perfect != null ? s.perfect : "—";
+  $("resOppGreat").textContent = s.great != null ? s.great : "—";
+  $("resOppGood").textContent = s.good != null ? s.good : "—";
   $("resOppMiss").textContent = s.miss;
+  $("resOppCombo").textContent = s.maxCombo;
+  $("resOppMult").textContent = s.maxMult != null ? "x" + s.maxMult : "—";
+  $("resOppHolds").textContent = s.holdsTotal ? `${s.holdsOk}/${s.holdsTotal}` : "—";
+  $("resOppAcc").textContent = s.acc + "%";
+  $("resOppScore").textContent = (+s.score).toLocaleString();
   if (MP.myStats) {
     const w = $("resWinner");
     w.style.display = "block";
@@ -1932,15 +1945,15 @@ function spawnHitEffect(lane, kind) {
   G.particles.push({ x, y: receptorY, ring: true, life: 0.32, t: 0, col: LANE_COLORS[lane] });
 }
 
-// vertical GH-style combo meter with the big multiplier at its base
-function drawMeter(t, laneW, x0, receptorY, H) {
-  const mx = Math.max(40, x0 - 64);
+// vertical GH-style combo meter with the big multiplier at its base;
+// st is any {combo, mult, multFlash} — used for self AND the MP opponent
+function drawMeter(t, mx, receptorY, H, st) {
   const mw = 26;
   const mh = Math.min(300, H * 0.38);
   const my1 = receptorY - 8;       // bottom of the segments
   const my0 = my1 - mh;            // top
-  const col = MULT_COLORS[G.mult] || "#8a8fb0";
-  const { nextThr, lit, segs } = meterProgress(G.combo);
+  const col = MULT_COLORS[st.mult] || "#8a8fb0";
+  const { nextThr, lit, segs } = meterProgress(st.combo);
   const maxed = nextThr === null;
 
   cx.save();
@@ -1973,8 +1986,8 @@ function drawMeter(t, laneW, x0, receptorY, H) {
   cx.globalAlpha = 1;
 
   // tier-up flash over the whole bar
-  if (G.multFlash > 0) {
-    cx.globalAlpha = G.multFlash * 0.5;
+  if (st.multFlash > 0) {
+    cx.globalAlpha = st.multFlash * 0.5;
     cx.fillStyle = "#ffffff";
     cx.beginPath();
     if (cx.roundRect) cx.roundRect(mx - mw / 2 - 4, my0 - 4, mw + 8, mh + 8, 8);
@@ -1984,15 +1997,15 @@ function drawMeter(t, laneW, x0, receptorY, H) {
   }
 
   // big multiplier
-  const scale = 1 + G.multFlash * 0.5;
-  const shimmer = G.mult >= 10 ? 0.5 + 0.5 * Math.sin(t * 8) : 0;
+  const scale = 1 + st.multFlash * 0.5;
+  const shimmer = st.mult >= 10 ? 0.5 + 0.5 * Math.sin(t * 8) : 0;
   cx.font = `900 ${Math.round(46 * scale)}px "Segoe UI", system-ui, sans-serif`;
   cx.textAlign = "center";
   cx.textBaseline = "top";
   cx.shadowColor = col;
   cx.shadowBlur = 18 + shimmer * 22;
   cx.fillStyle = col;
-  cx.fillText("x" + G.mult, mx, my1 + 14);
+  cx.fillText("x" + st.mult, mx, my1 + 14);
   cx.restore();
 }
 
@@ -2098,12 +2111,13 @@ function drawOppHud(geom) {
   cx.font = "700 15px 'Segoe UI', system-ui, sans-serif";
   cx.fillStyle = "rgba(255,255,255,0.75)";
   cx.fillText(`${o.name || "OPPONENT"} · ${o.score.toLocaleString()}`, midX, 14);
-  const col = MULT_COLORS[o.mult] || "#8a8fb0";
-  cx.font = "900 22px 'Segoe UI', system-ui, sans-serif";
-  cx.fillStyle = col;
-  cx.shadowColor = col;
-  cx.shadowBlur = 10;
-  cx.fillText("x" + o.mult + (o.combo >= 2 ? " · " + o.combo : ""), midX, 34);
+  if (o.combo >= 2) {
+    cx.font = "900 20px 'Segoe UI', system-ui, sans-serif";
+    cx.fillStyle = "#ffffff";
+    cx.shadowColor = "rgba(35,230,255,0.7)";
+    cx.shadowBlur = 10;
+    cx.fillText(o.combo + " combo", midX, 34); // the multiplier lives on their meter now
+  }
   cx.restore();
 }
 
@@ -2214,9 +2228,14 @@ function gameLoop() {
     cx.globalAlpha = 1;
   }
 
-  // GH-style combo meter + big multiplier
+  // GH-style combo meters + big multipliers (mine left, opponent's right)
   G.multFlash = Math.max(0, G.multFlash - dt * 2.5);
-  drawMeter(t, laneW, x0, receptorY, H);
+  drawMeter(t, Math.max(40, x0 - 64), receptorY, H, G);
+  if (MP.inGame && MP.opp) {
+    const og = oppGeometry();
+    MP.opp.multFlash = Math.max(0, (MP.opp.multFlash || 0) - dt * 2.5);
+    drawMeter(t, Math.min(W - 40, og.x0 + og.laneW * LANES + 64), og.receptorY, og.H, MP.opp);
+  }
 
   // countdown + progress
   const cd = $("hudCountdown");
@@ -2257,7 +2276,11 @@ function showResults() {
     ? `You hit on average ${Math.abs(Math.round(avgErr))} ms ${avgErr > 0 ? "late" : "early"} — try setting Audio offset to ${avgErr > 0 ? "+" : "-"}${Math.min(200, Math.abs(Math.round(avgErr)))} ms on the difficulty screen.`
     : "";
   if (MP.active) {
-    MP.myStats = { name: MP.myName, diff: S.difficulty, score: G.score, acc: +acc.toFixed(2), maxCombo: G.maxCombo, miss: c.miss };
+    MP.myStats = {
+      name: MP.myName, diff: S.difficulty, grade, score: G.score, acc: +acc.toFixed(2),
+      perfect: c.perfect, great: c.great, good: c.good, miss: c.miss,
+      maxCombo: G.maxCombo, maxMult: G.maxMult, holdsOk: G.holdsOk, holdsTotal: G.holdsTotal,
+    };
     mpSend({ type: "finish", stats: MP.myStats });
     MP.inGame = false;
     $("btnRetry").style.display = "none";
